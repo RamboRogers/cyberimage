@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CyberImage - AI Image Generator</title>
+    <link rel="icon" type="image/png" href="{{ url_for('static', filename='images/favicon.png') }}">
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/gallery.css') }}">
+</head>
+<body>
+    <nav class="nav">
+        <div class="nav-content">
+            <div class="nav-brand">
+                <a href="{{ url_for('main.index') }}" class="nav-logo">CyberImage</a>
+            </div>
+            <div class="nav-links">
+                <a href="{{ url_for('main.index') }}" class="nav-link active">Generate</a>
+                <a href="{{ url_for('main.gallery') }}" class="nav-link">Gallery</a>
+            </div>
+            <button class="nav-toggle" aria-label="Toggle navigation">
+                <span class="nav-toggle-icon"></span>
+            </button>
+        </div>
+    </nav>
+
+    <div class="container">
+        <section class="generator-section">
+            <form id="generate-form" class="generate-form">
+                <div class="form-layout">
+                    <!-- Left Column: Prompts -->
+                    <div class="form-col prompts-col">
+                        <div class="input-group">
+                            <div class="prompt-header">
+                                <label for="prompt-input">Vision Prompt</label>
+                                <button type="button" id="enrich-prompt" class="button button-small" aria-label="Enhance prompt with AI suggestions">
+                                    <span class="button-icon">✨</span> Enrich
+                                </button>
+                            </div>
+                            <textarea
+                                id="prompt-input"
+                                name="prompt"
+                                class="prompt-input"
+                                placeholder="Describe your cyberpunk vision..."
+                                required
+                                aria-describedby="prompt-help"
+                            ></textarea>
+                            <div id="prompt-help" class="input-help">Describe the image you want to generate</div>
+                        </div>
+
+                        <div class="input-group">
+                            <label for="negative-prompt">Negative Prompt</label>
+                            <textarea
+                                id="negative-prompt"
+                                name="negative_prompt"
+                                class="prompt-input negative"
+                                placeholder="Describe what you don't want in the image..."
+                                aria-describedby="negative-help"
+                            ></textarea>
+                            <div id="negative-help" class="input-help">Optional: Elements to exclude</div>
+                        </div>
+                    </div>
+
+                    <!-- Right Column: Settings -->
+                    <div class="form-col settings-col">
+                        <div class="settings-grid">
+                            <!-- Model Selection -->
+                            <div class="input-group">
+                                <label for="model">AI Model</label>
+                                <select name="model" id="model" class="input-field" required>
+                                    <option value="">Select Model</option>
+                                    {% for model_id, info in available_models.items() %}
+                                    <option value="{{ model_id }}">{{ model_id }} - {{ info.description }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+
+                            <!-- Image Settings -->
+                            <div class="settings-row">
+                                <div class="input-group compact">
+                                    <label for="width">Size</label>
+                                    <div class="dimension-controls">
+                                        <select id="width" name="width" class="input-field">
+                                            <option value="512">512px</option>
+                                            <option value="768">768px</option>
+                                            <option value="1024" selected>1024px</option>
+                                            <option value="1280">1280px</option>
+                                        </select>
+                                        <span class="dimension-separator">×</span>
+                                        <select id="height" name="height" class="input-field">
+                                            <option value="512">512px</option>
+                                            <option value="768">768px</option>
+                                            <option value="1024" selected>1024px</option>
+                                            <option value="1280">1280px</option>
+                                        </select>
+                                    </div>
+                                </div>
+
+                                <div class="input-group compact">
+                                    <label for="num_images">Images</label>
+                                    <div class="input-with-value">
+                                        <input type="range" id="num_images" name="num_images" min="1" max="8" value="1" class="slider">
+                                        <span id="num-images-value" class="value-display">1</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Generation Parameters -->
+                            <div class="settings-row">
+                                <div class="input-group compact">
+                                    <label for="steps">Steps</label>
+                                    <div class="input-with-value">
+                                        <input type="range" id="steps" name="steps" min="20" max="50" value="30" class="slider">
+                                        <span id="steps-value" class="value-display">30</span>
+                                    </div>
+                                </div>
+
+                                <div class="input-group compact">
+                                    <label for="guidance">Guidance</label>
+                                    <div class="input-with-value">
+                                        <input type="range" id="guidance" name="guidance" min="1" max="20" step="0.5" value="7.5" class="slider">
+                                        <span id="guidance-value" class="value-display">7.5</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <button type="submit" class="button button-generate">
+                            <span class="button-icon">⚡</span> Generate Image
+                        </button>
+                    </div>
+                </div>
+
+                <div class="generation-feedback" style="display: none;">
+                    <div class="generation-status">
+                        <div class="status-row">
+                            <div class="status-info">
+                                <div class="status-text"></div>
+                                <div class="queue-info">
+                                    <span class="queue-position"></span>
+                                    <span class="estimated-time"></span>
+                                </div>
+                            </div>
+                            <div class="generation-timer">
+                                <div class="timer-display">
+                                    <span class="timer-value">00:00</span>
+                                    <span class="timer-label">Elapsed</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="progress-container">
+                            <div class="progress-bar">
+                                <div class="progress-fill"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </form>
+        </section>
+
+        <section class="recent-images">
+            <h2>Recent Generations</h2>
+            <div class="gallery-grid">
+                {% for image in recent_images %}
+                <div class="gallery-item" data-image-id="{{ image.id }}">
+                    <img src="{{ url_for('api.get_image', image_id=image.id) }}"
+                         alt="{{ image.prompt[:50] }}..."
+                         loading="lazy">
+                    <div class="gallery-item-info">
+                        <p class="prompt">{{ image.prompt[:100] }}...</p>
+                        <p class="model">{{ image.model_id }}</p>
+                        <p class="date" title="{{ image.created_at.strftime('%Y-%m-%d %H:%M:%S %Z') }}">
+                            {{ image.created_at.strftime('%b %d, %I:%M %p') }}
+                        </p>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </section>
+    </div>
+
+    <!-- Modal for image details -->
+    <div class="modal">
+        <div class="modal-content">
+            <!-- Content will be dynamically inserted here -->
+        </div>
+    </div>
+
+    <div id="fullscreenModal" class="fullscreen-modal" style="display: none;">
+        <div class="fullscreen-content">
+            <div class="fullscreen-header">
+                <button class="action-close" aria-label="Close modal">×</button>
+            </div>
+            <div class="fullscreen-body">
+                <div class="fullscreen-image">
+                    <img src="" alt="Generated image" id="modalImage">
+                </div>
+                <div class="fullscreen-details">
+                    <div class="details-section">
+                        <h3>Model</h3>
+                        <pre id="modelInfo">Loading...</pre>
+                    </div>
+                    <div class="details-section">
+                        <h3>Prompt</h3>
+                        <div class="prompt-container">
+                            <pre id="promptInfo">Loading...</pre>
+                            <button class="action-copy" id="copyPrompt">
+                                <span class="icon">📋</span>
+                                Copy Prompt
+                            </button>
+                        </div>
+                    </div>
+                    <div class="details-section">
+                        <h3>Settings</h3>
+                        <pre id="settingsInfo">Loading...</pre>
+                    </div>
+                    <div class="details-section">
+                        <button class="action-download" id="downloadImage">
+                            <span class="icon">⬇️</span>
+                            Download Image
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html>

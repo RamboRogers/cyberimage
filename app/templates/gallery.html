@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CyberImage Gallery - AI Generated Images</title>
+    <link rel="icon" type="image/png" href="{{ url_for('static', filename='images/favicon.png') }}">
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/gallery.css') }}">
+</head>
+<body>
+    <nav class="nav">
+        <div class="nav-content">
+            <div class="nav-brand">
+                <a href="{{ url_for('main.index') }}" class="nav-logo">CyberImage</a>
+            </div>
+            <div class="nav-links">
+                <a href="{{ url_for('main.index') }}" class="nav-link">Generate</a>
+                <a href="{{ url_for('main.gallery') }}" class="nav-link active">Gallery</a>
+            </div>
+            <button class="nav-toggle" aria-label="Toggle navigation">
+                <span class="nav-toggle-icon"></span>
+            </button>
+        </div>
+    </nav>
+
+    <div class="container">
+        <section class="gallery-header">
+            <div class="gallery-controls">
+                <div class="view-toggles">
+                    <button class="view-toggle" data-view="grid">Grid</button>
+                    <button class="view-toggle" data-view="list">List</button>
+                    <button class="view-toggle" data-view="compact">Compact</button>
+                </div>
+
+                <div class="search-controls">
+                    <input type="text" class="quick-filter" placeholder="Quick filter... (Press '/' to focus)">
+                    <div class="tag-filters">
+                        <!-- Dynamic tags will be inserted here -->
+                    </div>
+                </div>
+            </div>
+
+            <div class="batch-operations" style="display: none;">
+                <div class="selected-count">0 selected</div>
+                <div class="batch-actions">
+                    <button class="batch-download">Download Selected</button>
+                    <button class="batch-delete">Delete Selected</button>
+                    <button class="batch-tag">Add Tags</button>
+                </div>
+            </div>
+        </section>
+
+        <section class="gallery-content">
+            <div class="gallery-grid" data-view="grid">
+                {% for image in images %}
+                <div class="gallery-item" data-image-id="{{ image.id }}">
+                    <div class="item-preview">
+                        <img data-src="{{ url_for('api.get_image', image_id=image.id) }}"
+                             alt="{{ image.prompt[:50] }}..."
+                             loading="lazy">
+                        <div class="quick-actions">
+                            <button class="action-copy-prompt" title="Copy Prompt">📋</button>
+                            <button class="action-favorite" title="Add to Favorites">⭐</button>
+                            <button class="action-download" title="Download">⬇️</button>
+                            <button class="action-delete" title="Delete Image">🗑️</button>
+                        </div>
+                    </div>
+                    <div class="item-details">
+                        <div class="prompt-preview">{{ image.prompt }}</div>
+                        <div class="metadata">
+                            <span class="model-info">{{ image.model_id }}</span>
+                            <span class="generation-time"
+                                  title="{{ image.created_at.strftime('%Y-%m-%d %H:%M:%S %Z') }}">
+                                {{ image.created_at.strftime('%b %d, %I:%M %p') }}
+                            </span>
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+
+            <div class="loading-indicator" style="display: none;">
+                <div class="spinner"></div>
+                <p>Loading more images...</p>
+            </div>
+        </section>
+    </div>
+
+    <!-- Keyboard shortcuts help -->
+    <div class="shortcuts-help" style="display: none;">
+        <h3>Keyboard Shortcuts</h3>
+        <ul>
+            <li><kbd>j</kbd> Next image</li>
+            <li><kbd>k</kbd> Previous image</li>
+            <li><kbd>f</kbd> Toggle favorite</li>
+            <li><kbd>c</kbd> Copy prompt</li>
+            <li><kbd>d</kbd> Download image</li>
+            <li><kbd>/</kbd> Focus search</li>
+            <li><kbd>space</kbd> Toggle selection</li>
+            <li><kbd>a</kbd> Select all</li>
+            <li><kbd>shift</kbd> + <kbd>a</kbd> Deselect all</li>
+            <li><kbd>esc</kbd> Clear selection</li>
+        </ul>
+    </div>
+
+    <div id="fullscreenModal" class="fullscreen-modal" style="display: none;">
+        <div class="fullscreen-content">
+            <div class="fullscreen-header">
+                <button class="action-close" aria-label="Close modal">×</button>
+            </div>
+            <div class="fullscreen-body">
+                <div class="fullscreen-image">
+                    <img src="" alt="Generated image" id="modalImage">
+                </div>
+                <div class="fullscreen-details">
+                    <div class="details-section">
+                        <h3>Model</h3>
+                        <pre id="modelInfo">Loading...</pre>
+                    </div>
+                    <div class="details-section">
+                        <h3>Prompt</h3>
+                        <div class="prompt-container">
+                            <pre id="promptInfo">Loading...</pre>
+                            <button class="action-copy" id="copyPrompt">
+                                <span class="icon">📋</span>
+                                Copy Prompt
+                            </button>
+                        </div>
+                    </div>
+                    <div class="details-section">
+                        <h3>Settings</h3>
+                        <pre id="settingsInfo">Loading...</pre>
+                    </div>
+                    <div class="details-section">
+                        <button class="action-download" id="downloadImage">
+                            <span class="icon">⬇️</span>
+                            Download Image
+                        </button>
+                        <button class="action-delete" id="deleteImage">
+                            <span class="icon">🗑️</span>
+                            Delete Image
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="deleteConfirmModal" class="modal">
+        <div class="modal-content delete-confirm">
+            <h3>Delete Image</h3>
+            <p>Are you sure you want to delete this image? This action cannot be undone.</p>
+            <div class="modal-actions">
+                <button id="confirmDelete" class="button-delete">Delete</button>
+                <button id="cancelDelete" class="button-cancel">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <script type="module" src="{{ url_for('static', filename='js/gallery.js') }}"></script>
+</body>
+</html>

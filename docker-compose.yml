@@ -1,0 +1,16 @@
+services:
+  cyberimage:
+    build: .
+    container_name: cyberimage  # Force specific container name
+    user: 1000:1000  # Run as UID 1000
+    ports:
+      - "5050:5050"
+    volumes:
+      - ${EXTERNAL_IMAGES_FOLDER}:/app/images
+      - ${EXTERNAL_MODEL_FOLDER}:/app/models
+    env_file:
+      - .env
+    environment:
+      - IMAGES_FOLDER=/app/images
+      - MODEL_FOLDER=/app/models
+    restart: unless-stopped
