@@ -1214,3 +1214,84 @@ body {
         max-height: 50vh;
     }
 }
+
+/* Queue Status Indicator */
+.queue-status-indicator {
+    display: flex;
+    align-items: center;
+    margin: 0 1rem;
+}
+
+.queue-indicator {
+    display: flex;
+    align-items: center;
+    padding: 0.4rem 0.8rem;
+    background: rgba(0, 0, 0, 0.4);
+    border: 1px solid var(--neon-green-dim);
+    border-radius: 20px;
+    transition: all 0.3s ease;
+}
+
+.queue-indicator.active {
+    background: rgba(57, 255, 20, 0.1);
+    border-color: var(--neon-green);
+    box-shadow: 0 0 10px rgba(57, 255, 20, 0.2);
+}
+
+.indicator-icon {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background-color: #555;
+    margin-right: 8px;
+    transition: background-color 0.3s ease;
+}
+
+.indicator-icon.active {
+    background-color: var(--neon-green);
+    box-shadow: 0 0 10px var(--neon-green);
+}
+
+.indicator-icon.pulse {
+    animation: pulse-animation 2s infinite;
+}
+
+.indicator-icon.idle {
+    background-color: #555;
+}
+
+.indicator-icon.processing {
+    background-color: var(--neon-green);
+}
+
+.indicator-text {
+    font-size: 0.8rem;
+    color: rgba(255, 255, 255, 0.8);
+    transition: color 0.3s ease;
+}
+
+.queue-indicator.active .indicator-text {
+    color: var(--neon-green);
+}
+
+@keyframes pulse-animation {
+    0% {
+        box-shadow: 0 0 0 0 rgba(57, 255, 20, 0.7);
+    }
+    70% {
+        box-shadow: 0 0 0 6px rgba(57, 255, 20, 0);
+    }
+    100% {
+        box-shadow: 0 0 0 0 rgba(57, 255, 20, 0);
+    }
+}
+
+/* Mobile responsive adjustments for queue indicator */
+@media (max-width: 768px) {
+    .queue-status-indicator {
+        margin: 0.5rem 0;
+        order: 3;
+        width: 100%;
+        justify-content: center;
+    }
+}

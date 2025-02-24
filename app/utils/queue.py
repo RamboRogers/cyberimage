@@ -7,6 +7,9 @@ from datetime import datetime
 from typing import Dict, Optional, List
 from flask import current_app
 from app.utils.db import get_db
+import logging
+
+logger = logging.getLogger(__name__)
 
 class QueueManager:
     """Manages the image generation queue"""
@@ -227,3 +230,82 @@ class QueueManager:
         except Exception as e:
             db.rollback()
             raise Exception(f"Failed to cleanup stalled jobs: {str(e)}")
+
+    @staticmethod
+    def retry_failed_job(job_id: str, max_retries: int = 3) -> Optional[str]:
+        """Retry a failed job by creating a new one with the same parameters"""
+        db = get_db()
+        try:
+            # Get original job details
+            job = db.execute(
+                """
+                SELECT id, model_id, prompt, negative_prompt, settings, status
+                FROM jobs
+                WHERE id = ?
+                """,
+                (job_id,)
+            ).fetchone()
+
+            if not job:
+                return None
+
+            # Only retry failed jobs
+            if job["status"] != "failed":
+                return None
+
+            # Extract settings and check retry count
+            settings = json.loads(job["settings"])
+
+            # Increment retry count or initialize it
+            retry_count = settings.get("retry_count", 0) + 1
+            if retry_count > max_retries:
+                # Update the original job with a note that max retries exceeded
+                db.execute(
+                    """
+                    UPDATE jobs
+                    SET error_message = ?
+                    WHERE id = ?
+                    """,
+                    (f"Failed after {max_retries} retry attempts", job_id)
+                )
+                db.commit()
+                return None
+
+            # Update settings with retry information
+            settings["retry_count"] = retry_count
+            settings["original_job_id"] = job_id
+
+            # Create a new job with same parameters
+            new_job_id = str(uuid.uuid4())
+            db.execute(
+                """
+                INSERT INTO jobs (id, status, model_id, prompt, negative_prompt, settings, error_message)
+                VALUES (?, 'pending', ?, ?, ?, ?, ?)
+                """,
+                (
+                    new_job_id,
+                    job["model_id"],
+                    job["prompt"],
+                    job["negative_prompt"],
+                    json.dumps(settings),
+                    f"Retry #{retry_count} of job {job_id}"
+                )
+            )
+
+            # Update original job to reference the retry
+            db.execute(
+                """
+                UPDATE jobs
+                SET error_message = ?
+                WHERE id = ?
+                """,
+                (f"Retried as job {new_job_id} (attempt {retry_count}/{max_retries})", job_id)
+            )
+
+            db.commit()
+            return new_job_id
+
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Failed to retry job {job_id}: {str(e)}")
+            return None

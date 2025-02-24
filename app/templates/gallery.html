@@ -15,6 +15,12 @@
             <div class="nav-brand">
                 <a href="{{ url_for('main.index') }}" class="nav-logo">CyberImage</a>
             </div>
+            <div class="queue-status-indicator">
+                <div class="queue-indicator">
+                    <div class="indicator-icon pulse" id="generation-status-icon"></div>
+                    <div class="indicator-text" id="queue-status-text">Queue: 0</div>
+                </div>
+            </div>
             <div class="nav-links">
                 <a href="{{ url_for('main.index') }}" class="nav-link">Generate</a>
                 <a href="{{ url_for('main.gallery') }}" class="nav-link active">Gallery</a>

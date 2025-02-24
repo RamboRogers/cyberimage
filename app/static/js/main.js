@@ -16,6 +16,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initializeGenerationForm();
     initializeInfiniteScroll();
     initializeMobileNav();
+    initializeQueueStatusIndicator();
 });
 
 // Initialize mobile navigation
@@ -830,5 +831,53 @@ async function handlePromptEnrichment(e) {
     } finally {
         enrichButton.disabled = false;
         enrichButton.textContent = originalText;
+    }
+}
+
+// Initialize queue status indicator
+function initializeQueueStatusIndicator() {
+    const statusIcon = document.getElementById('generation-status-icon');
+    const statusText = document.getElementById('queue-status-text');
+    const queueIndicator = statusIcon?.closest('.queue-indicator');
+
+    if (!statusIcon || !statusText || !queueIndicator) return;
+
+    // Initial update
+    updateQueueStatusIndicator();
+
+    // Update every 5 seconds
+    setInterval(updateQueueStatusIndicator, 5000);
+
+    function updateQueueStatusIndicator() {
+        fetch('/api/queue')
+            .then(response => response.json())
+            .then(data => {
+                const { pending, processing, completed, failed } = data;
+                const totalActive = pending + processing;
+
+                // Update text
+                statusText.textContent = `Queue: ${totalActive}`;
+
+                // Update icon state
+                if (processing > 0) {
+                    statusIcon.className = 'indicator-icon pulse processing';
+                    queueIndicator.classList.add('active');
+                    statusText.textContent = `Generating... (${pending} waiting)`;
+                } else if (pending > 0) {
+                    statusIcon.className = 'indicator-icon pulse';
+                    queueIndicator.classList.add('active');
+                    statusText.textContent = `Queue: ${pending}`;
+                } else {
+                    statusIcon.className = 'indicator-icon idle';
+                    queueIndicator.classList.remove('active');
+                    statusText.textContent = 'Ready';
+                }
+            })
+            .catch(error => {
+                console.error('Error fetching queue status:', error);
+                statusIcon.className = 'indicator-icon idle';
+                queueIndicator.classList.remove('active');
+                statusText.textContent = 'Status unavailable';
+            });
     }
 }
