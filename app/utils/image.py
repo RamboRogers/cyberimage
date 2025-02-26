@@ -222,3 +222,26 @@ class ImageManager:
             db.rollback()
             current_app.logger.error(f"Failed to delete image {image_id}: {str(e)}")
             return False
+
+    @staticmethod
+    def get_images_for_job(job_id: str) -> List[Dict]:
+        """Get all images associated with a specific job"""
+        db = get_db()
+        images = db.execute(
+            """
+            SELECT id, file_path, created_at, metadata
+            FROM images
+            WHERE job_id = ?
+            ORDER BY created_at DESC
+            """,
+            (job_id,)
+        ).fetchall()
+
+        return [{
+            "id": img["id"],
+            "file_path": img["file_path"],
+            "created_at": ImageManager._convert_to_local(img["created_at"]),
+            "metadata": json.loads(img["metadata"]),
+            "model_id": json.loads(img["metadata"])["model_id"],
+            "prompt": json.loads(img["metadata"])["prompt"]
+        } for img in images]

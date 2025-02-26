@@ -50,13 +50,28 @@ class QueueManager:
             """
         ).fetchall()
 
-        return [{
+        result = []
+        for job in jobs:
+            # Create job dict with basic information
+            job_dict = {
             "id": job["id"],
             "model_id": job["model_id"],
             "prompt": job["prompt"],
             "settings": json.loads(job["settings"]),
-            "started_at": job["started_at"]
-        } for job in jobs]
+            }
+
+            # Handle started_at with better type information
+            if job["started_at"] is not None:
+                # Add the original timestamp for debugging
+                job_dict["started_at"] = job["started_at"]
+                # Log the timestamp type for debugging
+                logger.debug(f"Job {job['id']} has timestamp of type {type(job['started_at'])}: {repr(job['started_at'])}")
+            else:
+                job_dict["started_at"] = None
+
+            result.append(job_dict)
+
+        return result
 
     @staticmethod
     def get_pending_jobs() -> List[Dict]:
@@ -80,6 +95,37 @@ class QueueManager:
         } for job in jobs]
 
     @staticmethod
+    def get_failed_jobs(max_retry_attempts: int = 3) -> List[Dict]:
+        """Get all failed jobs that could be retried"""
+        db = get_db()
+        jobs = db.execute(
+            """
+            SELECT id, model_id, prompt, negative_prompt, settings, error_message
+            FROM jobs
+            WHERE status = 'failed'
+            ORDER BY created_at DESC
+            """
+        ).fetchall()
+
+        retryable_jobs = []
+        for job in jobs:
+            settings = json.loads(job["settings"])
+            # Check if the job has exceeded the retry limit
+            retry_count = settings.get("retry_count", 0)
+            if retry_count < max_retry_attempts:
+                retryable_jobs.append({
+                    "id": job["id"],
+                    "model_id": job["model_id"],
+                    "prompt": job["prompt"],
+                    "negative_prompt": job["negative_prompt"],
+                    "settings": settings,
+                    "error_message": job["error_message"],
+                    "retry_count": retry_count
+                })
+
+        return retryable_jobs
+
+    @staticmethod
     def get_job_status(job_id: str) -> Dict:
         """Get the status of a specific job"""
         db = get_db()
@@ -95,6 +141,60 @@ class QueueManager:
         if job is None:
             return {"error": "Job not found"}
 
+        # Extract error message for parsing
+        error_message = job["error_message"] or ""
+
+        # Determine progress state more accurately
+        progress = {
+            "preparing": False,
+            "loading_model": False,
+            "generating": False,
+            "saving": False,
+            "completed": False,
+            "failed": False,
+            # Add step information if available
+            "step": None,
+            "total_steps": None
+        }
+
+        # Parse detailed progress from the error_message field
+        # (which is used to store status messages, not just errors)
+        if "Loading model" in error_message:
+            progress["loading_model"] = True
+        elif "Generating image" in error_message:
+            progress["generating"] = True
+            # Try to extract step information if available
+            try:
+                # Look for patterns like "Step 23/30" or similar in the message
+                if "Step " in error_message:
+                    step_part = error_message.split("Step ")[1].strip()
+                    if "/" in step_part:
+                        current_step, total_steps = step_part.split("/", 1)
+                        # Remove any text after the number
+                        if " " in total_steps:
+                            total_steps = total_steps.split(" ")[0]
+                        progress["step"] = int(current_step)
+                        progress["total_steps"] = int(total_steps)
+            except Exception as e:
+                logger.warning(f"Error parsing step information: {e}")
+        elif "Saving" in error_message:
+            progress["saving"] = True
+        elif job["status"] == "pending":
+            progress["preparing"] = True
+        elif job["status"] == "completed":
+            progress["completed"] = True
+        elif job["status"] == "failed":
+            progress["failed"] = True
+
+        # Set default step if we're generating but don't have step info
+        if progress["generating"] and progress["step"] is None:
+            # Default values based on typical generation settings
+            settings = json.loads(job["settings"])
+            default_steps = settings.get("num_inference_steps", 30)
+            progress["total_steps"] = default_steps
+            # Use a sensible default for current step if we can't determine it
+            progress["step"] = 1
+
         return {
             "id": job["id"],
             "status": job["status"],
@@ -105,15 +205,8 @@ class QueueManager:
             "created_at": job["created_at"],
             "started_at": job["started_at"],
             "completed_at": job["completed_at"],
-            "message": job["error_message"],
-            "progress": {
-                "preparing": job["status"] == "pending",
-                "loading_model": job["status"] == "processing" and "Loading model" in (job["error_message"] or ""),
-                "generating": job["status"] == "processing" and "Generating" in (job["error_message"] or ""),
-                "saving": job["status"] == "processing" and "Saving" in (job["error_message"] or ""),
-                "completed": job["status"] == "completed",
-                "failed": job["status"] == "failed"
-            }
+            "message": error_message,
+            "progress": progress
         }
 
     @staticmethod
@@ -163,12 +256,21 @@ class QueueManager:
         if job is None:
             return None
 
+        settings = json.loads(job["settings"])
+
+        # Store retry info separately in metadata
+        metadata = {
+            "retry_count": settings.pop("retry_count", 0),
+            "original_job_id": settings.pop("original_job_id", None)
+        }
+
         return {
             "id": job["id"],
             "model_id": job["model_id"],
             "prompt": job["prompt"],
             "negative_prompt": job["negative_prompt"],
-            "settings": json.loads(job["settings"])
+            "settings": settings,
+            "metadata": metadata
         }
 
     @staticmethod
@@ -233,13 +335,13 @@ class QueueManager:
 
     @staticmethod
     def retry_failed_job(job_id: str, max_retries: int = 3) -> Optional[str]:
-        """Retry a failed job by creating a new one with the same parameters"""
+        """Retry a failed job by updating its status back to pending"""
         db = get_db()
         try:
             # Get original job details
             job = db.execute(
                 """
-                SELECT id, model_id, prompt, negative_prompt, settings, status
+                SELECT id, model_id, prompt, negative_prompt, settings, status, error_message
                 FROM jobs
                 WHERE id = ?
                 """,
@@ -251,6 +353,26 @@ class QueueManager:
 
             # Only retry failed jobs
             if job["status"] != "failed":
+                return None
+
+            # Check if error is due to incompatible parameters - don't retry these
+            error_message = job["error_message"] or ""
+            if ("unexpected keyword argument" in error_message or
+                "got an unexpected keyword" in error_message or
+                "not supported" in error_message or
+                "StableDiffusion3Pipeline" in error_message or
+                "incompatible" in error_message):
+                logger.warning(f"Not retrying job {job_id} due to likely model incompatibility: {error_message}")
+                # Update the job with a note that it won't be retried
+                db.execute(
+                    """
+                    UPDATE jobs
+                    SET error_message = ?
+                    WHERE id = ?
+                    """,
+                    (f"{error_message} - Automatic retry disabled: model incompatibility detected.", job_id)
+                )
+                db.commit()
                 return None
 
             # Extract settings and check retry count
@@ -273,39 +395,138 @@ class QueueManager:
 
             # Update settings with retry information
             settings["retry_count"] = retry_count
-            settings["original_job_id"] = job_id
 
-            # Create a new job with same parameters
-            new_job_id = str(uuid.uuid4())
-            db.execute(
-                """
-                INSERT INTO jobs (id, status, model_id, prompt, negative_prompt, settings, error_message)
-                VALUES (?, 'pending', ?, ?, ?, ?, ?)
-                """,
-                (
-                    new_job_id,
-                    job["model_id"],
-                    job["prompt"],
-                    job["negative_prompt"],
-                    json.dumps(settings),
-                    f"Retry #{retry_count} of job {job_id}"
-                )
-            )
-
-            # Update original job to reference the retry
+            # Instead of creating a new job, update the existing job to pending
             db.execute(
                 """
                 UPDATE jobs
-                SET error_message = ?
+                SET status = 'pending',
+                    started_at = NULL,
+                    completed_at = NULL,
+                    settings = ?,
+                    error_message = ?
                 WHERE id = ?
                 """,
-                (f"Retried as job {new_job_id} (attempt {retry_count}/{max_retries})", job_id)
+                (
+                    json.dumps(settings),
+                    f"Job retried (attempt {retry_count}/{max_retries})",
+                    job_id
+                )
             )
 
             db.commit()
-            return new_job_id
+            logger.info(f"Job {job_id} updated back to pending status (retry attempt {retry_count}/{max_retries})")
+            return job_id
 
         except Exception as e:
             db.rollback()
             logger.error(f"Failed to retry job {job_id}: {str(e)}")
             return None
+
+    @staticmethod
+    def get_all_jobs() -> List[Dict]:
+        """Get all jobs in the queue with detailed information"""
+        db = get_db()
+        jobs = db.execute(
+            """
+            SELECT id, status, model_id, prompt, negative_prompt, settings,
+                   created_at, started_at, completed_at, error_message
+            FROM jobs
+            ORDER BY created_at DESC
+            """
+        ).fetchall()
+
+        return [{
+            "id": job["id"],
+            "status": job["status"],
+            "model_id": job["model_id"],
+            "prompt": job["prompt"],
+            "negative_prompt": job["negative_prompt"],
+            "settings": json.loads(job["settings"]),
+            "created_at": job["created_at"],
+            "started_at": job["started_at"],
+            "completed_at": job["completed_at"],
+            "error_message": job["error_message"]
+        } for job in jobs]
+
+    @staticmethod
+    def get_job(job_id: str) -> Optional[Dict]:
+        """Get detailed information for a specific job"""
+        db = get_db()
+        job = db.execute(
+            """
+            SELECT id, status, model_id, prompt, negative_prompt, settings,
+                   created_at, started_at, completed_at, error_message
+            FROM jobs WHERE id = ?
+            """,
+            (job_id,)
+        ).fetchone()
+
+        if job is None:
+            return None
+
+        return {
+            "id": job["id"],
+            "status": job["status"],
+            "model_id": job["model_id"],
+            "prompt": job["prompt"],
+            "negative_prompt": job["negative_prompt"],
+            "settings": json.loads(job["settings"]),
+            "created_at": job["created_at"],
+            "started_at": job["started_at"],
+            "completed_at": job["completed_at"],
+            "error_message": job["error_message"]
+        }
+
+    @staticmethod
+    def delete_job(job_id: str) -> bool:
+        """Delete a job from the queue"""
+        db = get_db()
+        try:
+            # Check if job exists
+            job = db.execute("SELECT id FROM jobs WHERE id = ?", (job_id,)).fetchone()
+            if job is None:
+                return False
+
+            # Delete the job
+            db.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+            db.commit()
+            return True
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Failed to delete job {job_id}: {str(e)}")
+            return False
+
+    @staticmethod
+    def clear_queue_by_status(status: str) -> int:
+        """Clear all jobs with a specific status from the queue"""
+        db = get_db()
+        try:
+            # Get count of affected rows
+            count = db.execute("SELECT COUNT(*) as count FROM jobs WHERE status = ?", (status,)).fetchone()["count"]
+
+            # Delete the jobs
+            db.execute("DELETE FROM jobs WHERE status = ?", (status,))
+            db.commit()
+            return count
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Failed to clear queue with status {status}: {str(e)}")
+            return 0
+
+    @staticmethod
+    def clear_all_jobs() -> int:
+        """Clear all jobs from the queue"""
+        db = get_db()
+        try:
+            # Get count of affected rows
+            count = db.execute("SELECT COUNT(*) as count FROM jobs").fetchone()["count"]
+
+            # Delete all jobs
+            db.execute("DELETE FROM jobs")
+            db.commit()
+            return count
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Failed to clear all jobs: {str(e)}")
+            return 0

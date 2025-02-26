@@ -8,6 +8,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/gallery.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
 <body>
     <nav class="nav">
@@ -17,7 +18,7 @@
             </div>
             <div class="queue-status-indicator">
                 <div class="queue-indicator">
-                    <div class="indicator-icon pulse" id="generation-status-icon"></div>
+                    <i class="fas fa-check-circle" id="generation-status-icon"></i>
                     <div class="indicator-text" id="queue-status-text">Queue: 0</div>
                 </div>
             </div>
@@ -40,18 +41,46 @@
                         <div class="input-group">
                             <div class="prompt-header">
                                 <label for="prompt-input">Vision Prompt</label>
-                                <button type="button" id="enrich-prompt" class="button button-small" aria-label="Enhance prompt with AI suggestions">
-                                    <span class="button-icon">✨</span> Enrich
-                                </button>
+                                <div class="enrich-controls-wrapper">
+                                    <label for="enrich-style" class="enrich-label">Style:</label>
+                                    <div class="enrich-controls">
+                                        <select id="enrich-style" class="enrich-style">
+                                            <option value="cyberpunk">CyberPunk</option>
+                                            <option value="anime">Anime</option>
+                                            <option value="realistic">Real</option>
+                                            <option value="enhance">Enhance</option>
+                                            <option value="fantasy">Fantasy</option>
+                                            <option value="sci-fi">Sci-Fi</option>
+                                        </select>
+                                        <button type="button" id="enrich-prompt" class="button button-small" aria-label="Enhance prompt with AI suggestions">
+                                            <span class="button-icon">✨</span> Enrich
+                                        </button>
+                                        <span class="enrich-info-icon" id="enrich-info">?</span>
+                                        <div class="enrich-tooltip">
+                                            The Enrich feature uses AI to enhance your prompt with style-specific details, making your generated images more vivid and detailed. Select a style and click Enrich to transform your basic prompt.
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
                             <textarea
                                 id="prompt-input"
                                 name="prompt"
                                 class="prompt-input"
-                                placeholder="Describe your cyberpunk vision..."
+                                placeholder="Describe your vision in detail for better results..."
                                 required
                                 aria-describedby="prompt-help"
+                                rows="5"
                             ></textarea>
+                            <div class="prompt-comparison" id="prompt-comparison" style="display: none;">
+                                <div class="comparison-header">
+                                    <span class="comparison-title">Original Prompt</span>
+                                    <button type="button" class="comparison-close" id="close-comparison">×</button>
+                                </div>
+                                <div class="original-prompt" id="original-prompt"></div>
+                                <button type="button" class="button button-small comparison-restore" id="restore-original">
+                                    <span class="button-icon">↩️</span> Restore Original
+                                </button>
+                            </div>
                             <div id="prompt-help" class="input-help">Describe the image you want to generate</div>
                         </div>
 
@@ -211,7 +240,7 @@
                         <h3>Prompt</h3>
                         <div class="prompt-container">
                             <pre id="promptInfo">Loading...</pre>
-                            <button class="action-copy" id="copyPrompt">
+                            <button class="action-copy" id="copyPrompt" type="button">
                                 <span class="icon">📋</span>
                                 Copy Prompt
                             </button>

@@ -7,7 +7,9 @@ import torch
 import gc
 import sys
 import logging
+from flask import current_app
 from app.utils.queue import QueueManager
+from datetime import datetime
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -18,18 +20,20 @@ class GPUWatchdog:
     Note: High GPU memory usage (up to 100%) is normal and expected for Flux models.
     """
 
-    def __init__(self, model_manager, max_stalled_time=400, check_interval=30,
+    def __init__(self, model_manager, app=None, max_stalled_time=400, check_interval=30,
                  recovery_cooldown=300):
         """
         Initialize the GPU watchdog
 
         Args:
             model_manager: The ModelManager instance to monitor
+            app: Flask application instance for context
             max_stalled_time: Maximum time (in seconds) a job can be "processing" before recovery
             check_interval: Time (in seconds) between health checks
             recovery_cooldown: Minimum time (in seconds) between emergency recoveries
         """
         self.model_manager = model_manager
+        self.app = app
         self.max_stalled_time = max_stalled_time
         self.check_interval = check_interval
         self.recovery_cooldown = recovery_cooldown
@@ -39,11 +43,11 @@ class GPUWatchdog:
         self.last_recovery_time = 0
         self.recovery_in_progress = False
 
-        print("\n🔍 GPU Watchdog initialized")
-        print(f"   • Max stalled job time: {max_stalled_time} seconds")
-        print(f"   • Check interval: {check_interval} seconds")
-        print(f"   • Recovery cooldown: {recovery_cooldown} seconds")
-        sys.stdout.flush()
+        logger.info(f"GPU Watchdog initialized (max_stalled_time={max_stalled_time}s, check_interval={check_interval}s)")
+
+    def _get_app(self):
+        """Get the Flask application instance or the stored one"""
+        return self.app or current_app._get_current_object()
 
     def start(self):
         """Start the watchdog monitoring thread"""
@@ -53,16 +57,14 @@ class GPUWatchdog:
         self.running = True
         self.thread = threading.Thread(target=self._monitor_loop, daemon=True)
         self.thread.start()
-        print("\n🚀 GPU Watchdog started")
-        sys.stdout.flush()
+        logger.info("GPU Watchdog started")
 
     def stop(self):
         """Stop the watchdog monitoring thread"""
         self.running = False
         if self.thread and self.thread.is_alive():
             self.thread.join(timeout=5)
-        print("\n🛑 GPU Watchdog stopped")
-        sys.stdout.flush()
+        logger.info("GPU Watchdog stopped")
 
     def _monitor_loop(self):
         """Main monitoring loop"""
@@ -72,13 +74,12 @@ class GPUWatchdog:
                 self._log_gpu_memory()
 
                 # Check for stalled jobs - this is our primary focus
-                self._check_stalled_jobs()
+                with self._get_app().app_context():
+                    self._check_stalled_jobs()
 
                 # Sleep until next check
                 time.sleep(self.check_interval)
             except Exception as e:
-                print(f"\n❌ Error in watchdog monitoring: {str(e)}")
-                sys.stdout.flush()
                 logger.error(f"Watchdog error: {str(e)}")
                 # Sleep a bit longer on error
                 time.sleep(self.check_interval * 2)
@@ -97,20 +98,14 @@ class GPUWatchdog:
             # Calculate usage percentage
             usage_percentage = memory_allocated / total_memory
 
-            # Log memory state at regular intervals
-            print(f"\n🔍 Watchdog GPU Memory Check:")
-            print(f"   • Total Memory: {total_memory:.2f}GB")
-            print(f"   • Allocated Memory: {memory_allocated:.2f}GB")
-            print(f"   • Reserved Memory: {memory_reserved:.2f}GB")
-            print(f"   • Usage: {usage_percentage:.2%}")
-            sys.stdout.flush()
+            # Only log if usage is above 90% or below 10% to reduce chattiness
+            if usage_percentage > 0.9 or usage_percentage < 0.1:
+                logger.info(f"GPU Memory: {memory_allocated:.2f}GB/{total_memory:.2f}GB ({usage_percentage:.2%})")
 
-            # Note: We don't trigger recovery based on memory usage alone
-            # since 100% usage is normal for Flux models
+            # Don't print to stdout for regular checks
         except Exception as e:
-            print(f"\n❌ Error checking GPU memory: {str(e)}")
-            sys.stdout.flush()
             logger.error(f"Error checking GPU memory: {str(e)}")
+            # Don't print to stdout
 
     def _check_stalled_jobs(self):
         """Check for jobs that have been processing for too long"""
@@ -124,41 +119,68 @@ class GPUWatchdog:
                     continue
 
                 # Parse the timestamp from the database
-                # If this is already a timestamp, use it directly
                 start_time = job.get("started_at")
-                if isinstance(start_time, str):
-                    # If it's an ISO format timestamp, convert to time
-                    try:
-                        from datetime import datetime
-                        # This assumes the timestamp is in iso format
-                        dt = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
-                        start_time = dt.timestamp()
-                    except Exception as e:
-                        print(f"\n❌ Error parsing job timestamp: {str(e)}")
-                        sys.stdout.flush()
+
+                # Handle different types of start_time values with robust parsing
+                try:
+                    # Case 1: Already a timestamp (float or int)
+                    if isinstance(start_time, (int, float)):
+                        pass  # Already in the correct format
+
+                    # Case 2: Already a datetime object
+                    elif isinstance(start_time, datetime):
+                        start_time = start_time.timestamp()
+
+                    # Case 3: String format - try multiple parsing approaches
+                    elif isinstance(start_time, str):
+                        # Try parsing as ISO format first
+                        try:
+                            # Handle various ISO formats with/without timezone
+                            if 'T' in start_time:
+                                # Standard ISO format
+                                dt = datetime.fromisoformat(start_time.replace('Z', '+00:00'))
+                            else:
+                                # SQLite date format
+                                dt = datetime.strptime(start_time, '%Y-%m-%d %H:%M:%S')
+                            start_time = dt.timestamp()
+                        except ValueError:
+                            # Try other common formats
+                            for fmt in ['%Y-%m-%d %H:%M:%S.%f', '%Y-%m-%d %H:%M:%S', '%Y-%m-%dT%H:%M:%S.%fZ']:
+                                try:
+                                    dt = datetime.strptime(start_time, fmt)
+                                    start_time = dt.timestamp()
+                                    break
+                                except ValueError:
+                                    continue
+                            else:
+                                # If we get here, none of the formats worked
+                                raise ValueError(f"Could not parse timestamp: {start_time}")
+
+                    # Case 4: Unhandled type
+                    else:
+                        logger.warning(f"Unhandled timestamp type: {type(start_time)}")
                         continue
 
-                # Calculate how long the job has been processing
-                processing_time = current_time - start_time
+                    # Calculate how long the job has been processing
+                    processing_time = current_time - start_time
 
-                # If it's been processing too long, attempt recovery
-                if processing_time > self.max_stalled_time:
-                    print(f"\n⚠️ Stalled job detected: {job['id']}")
-                    print(f"   • Processing time: {processing_time:.1f} seconds")
-                    print(f"   • Exceeds maximum allowed time: {self.max_stalled_time} seconds")
-                    sys.stdout.flush()
-                    self._recover_stalled_job(job)
+                    # If it's been processing too long, attempt recovery
+                    if processing_time > self.max_stalled_time:
+                        logger.warning(f"Stalled job detected: {job['id']} (processing for {processing_time:.1f}s)")
+                        self._recover_stalled_job(job)
+
+                except Exception as e:
+                    logger.warning(f"Error processing job timestamp for job {job['id']}: {str(e)}")
+                    continue
+
         except Exception as e:
-            print(f"\n❌ Error checking stalled jobs: {str(e)}")
-            sys.stdout.flush()
             logger.error(f"Error checking stalled jobs: {str(e)}")
 
     def _recover_stalled_job(self, job):
         """Mark a stalled job as failed and resubmit it for retry"""
         try:
             job_id = job["id"]
-            print(f"\n🔄 Recovering stalled job: {job_id}")
-            sys.stdout.flush()
+            logger.info(f"Recovering stalled job: {job_id}")
 
             # Mark job as failed
             QueueManager.update_job_status(
@@ -172,44 +194,42 @@ class GPUWatchdog:
                 self._perform_emergency_recovery()
 
             # Now retry the job
-            new_job_id = QueueManager.retry_failed_job(job_id)
-            if new_job_id:
-                print(f"✅ Job {job_id} automatically retried as {new_job_id}")
+            retried_job_id = QueueManager.retry_failed_job(job_id)
+            if retried_job_id:
+                logger.info(f"Job {job_id} reset to pending state and will be retried")
             else:
-                print(f"❌ Could not retry job {job_id} - may have exceeded retry limit")
+                logger.warning(f"Could not retry job {job_id} - may have exceeded retry limit")
 
-            print(f"✅ Recovery complete for job: {job_id}")
-            sys.stdout.flush()
-            logger.info(f"Recovered stalled job: {job_id}")
         except Exception as e:
-            print(f"\n❌ Error recovering stalled job: {str(e)}")
-            sys.stdout.flush()
             logger.error(f"Error recovering stalled job: {str(e)}")
 
     def _perform_emergency_recovery(self):
         """Handle critical situations by cleaning up resources"""
         if self.recovery_in_progress:
-            print("\n⚠️ Emergency recovery already in progress, skipping")
-            sys.stdout.flush()
+            logger.info("Emergency recovery already in progress, skipping")
             return
 
+        # Use time.time() directly to avoid any datetime conversion issues
         current_time = time.time()
+
+        # Ensure last_recovery_time is a valid timestamp
+        if not isinstance(self.last_recovery_time, (int, float)):
+            logger.warning(f"Invalid last_recovery_time ({type(self.last_recovery_time)}), resetting to 0")
+            self.last_recovery_time = 0
+
         if current_time - self.last_recovery_time < self.recovery_cooldown:
-            cooldown_remaining = self.recovery_cooldown - (current_time - self.last_recovery_time)
-            print(f"\n⚠️ Recovery cooldown period active. {cooldown_remaining:.0f}s remaining.")
-            sys.stdout.flush()
+            # Don't log cooldown periods to reduce noise
             return
 
         self.recovery_in_progress = True
         self.last_recovery_time = current_time
 
         try:
-            print("\n🚨 EMERGENCY RECOVERY INITIATED")
-            print("   • Forcing complete cleanup of resources")
-            sys.stdout.flush()
+            logger.warning("EMERGENCY RECOVERY INITIATED")
 
             # First, mark all currently processing jobs as failed
-            self._recover_all_processing_jobs()
+            with self._get_app().app_context():
+                self._recover_all_processing_jobs()
 
             # Force model cleanup
             if self.model_manager:
@@ -226,12 +246,8 @@ class GPUWatchdog:
                 total_memory = torch.cuda.get_device_properties(0).total_memory / (1024**3)
                 usage_percentage = memory_allocated / total_memory
 
-                print(f"\n✅ Emergency recovery completed")
-                print(f"   • GPU memory after recovery: {memory_allocated:.2f}GB ({usage_percentage:.2%})")
-                sys.stdout.flush()
+                logger.info(f"Emergency recovery completed. GPU memory: {memory_allocated:.2f}GB ({usage_percentage:.2%})")
         except Exception as e:
-            print(f"\n❌ Error during emergency recovery: {str(e)}")
-            sys.stdout.flush()
             logger.error(f"Error during emergency recovery: {str(e)}")
         finally:
             self.recovery_in_progress = False
@@ -241,10 +257,10 @@ class GPUWatchdog:
         try:
             processing_jobs = QueueManager.get_processing_jobs()
             if not processing_jobs:
-                print("   • No processing jobs to recover")
+                logger.info("No processing jobs to recover")
                 return
 
-            print(f"   • Recovering {len(processing_jobs)} processing jobs")
+            logger.info(f"Recovering {len(processing_jobs)} processing jobs")
             for job in processing_jobs:
                 job_id = job["id"]
                 QueueManager.update_job_status(
@@ -252,18 +268,11 @@ class GPUWatchdog:
                     "failed",
                     "Job interrupted by emergency recovery"
                 )
-                print(f"   • Marked job {job_id} as failed")
 
                 # Try to retry the job
-                new_job_id = QueueManager.retry_failed_job(job_id)
-                if new_job_id:
-                    print(f"   • Job {job_id} automatically retried as {new_job_id}")
-                else:
-                    print(f"   • Could not retry job {job_id} - may have exceeded retry limit")
+                retried_job_id = QueueManager.retry_failed_job(job_id)
+                if not retried_job_id:
+                    logger.warning(f"Could not retry job {job_id} - may have exceeded retry limit")
 
-            print(f"   • All processing jobs marked as failed for recovery")
-            sys.stdout.flush()
         except Exception as e:
-            print(f"\n❌ Error recovering processing jobs: {str(e)}")
-            sys.stdout.flush()
             logger.error(f"Error recovering processing jobs: {str(e)}")

@@ -110,6 +110,10 @@ def create_app(test_config=None):
     from app.main import bp as main_bp
     app.register_blueprint(main_bp)
 
+    # Register admin blueprint
+    from app.admin import bp as admin_bp
+    app.register_blueprint(admin_bp)
+
     # Health check endpoint
     @app.route("/health")
     def health_check():
