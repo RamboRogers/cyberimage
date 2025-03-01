@@ -10,6 +10,7 @@ import signal
 import atexit
 import gc
 import threading
+import time
 from app import create_app
 
 # --- PyTorch Memory Management Configuration ---
@@ -19,11 +20,22 @@ os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True,max_split_size
 os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 # Add optimization for memory allocation/deallocation
 os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
-# Enable profiling for better diagnosis of memory issues if needed
-# os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'  # Helps on Mac
+# Enable tensor debugging when needed
+# os.environ['PYTORCH_DEBUG'] = '1'
 
 # --- Create the Flask application ---
 app = create_app()
+
+# Ensure the generator is properly initialized
+with app.app_context():
+    from app.models.generator import GenerationPipeline
+
+    # Store reference to the generator for cleanup
+    if not hasattr(app, '_generator'):
+        print("\n🔄 Initializing GenerationPipeline during application startup")
+        app._generator = GenerationPipeline()
+        print("✅ GenerationPipeline initialized")
+        sys.stdout.flush()
 
 # --- Register cleanup handlers ---
 def cleanup_handler(signum=None, frame=None):
@@ -45,6 +57,8 @@ def cleanup_handler(signum=None, frame=None):
             if hasattr(app, '_generator'):
                 print("✅ Stopping generator pipeline...")
                 app._generator.stop()
+                # Give it some time to complete cleanup
+                time.sleep(1)
                 sys.stdout.flush()
 
             # Force CUDA cleanup if available
@@ -93,9 +107,11 @@ if hasattr(signal, 'SIGQUIT'):
 
 if __name__ == "__main__":
     print("\n🚀 Starting CyberImage with optimized GPU memory management")
-    print("⚠️ PRODUCTION NOTE: Run with a single worker when using Gunicorn")
+    print("⚠️ PRODUCTION NOTE: Using a single worker is REQUIRED for this application")
     print("   Example: gunicorn -w 1 -b 0.0.0.0:5050 run:app")
+    print("⚠️ Multiple workers will cause memory/generation conflicts!")
     sys.stdout.flush()
 
     # For development, use threaded=True with a single process
+    # The threaded Flask server is fine since we have a dedicated generation thread
     app.run(debug=True, host="0.0.0.0", port=5050, use_reloader=False, threaded=True)

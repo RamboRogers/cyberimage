@@ -93,14 +93,15 @@ def generate_image():
         num_images = min(int(settings.get("num_images", 1)), 8)
         settings["num_images"] = num_images
 
-        # Create job
+        # Create job in the database first
         job_id = QueueManager.add_job(model_id, data["prompt"], settings)
 
-        # Add to generation queue
+        # Add to generation queue - just pass the job ID to trigger processing
         g.generator.add_job({
             "id": job_id,
             "model_id": model_id,
             "prompt": data["prompt"],
+            "negative_prompt": negative_prompt,
             "settings": settings
         })
 
@@ -129,8 +130,24 @@ def get_job_status(job_id):
 
         # If job is completed, include image information
         if status["status"] == "completed":
-            images = ImageManager.get_job_images(job_id)
-            status["images"] = images
+            # Check if we already have image_ids from the status
+            if "image_ids" in status:
+                # Use the stored image IDs
+                image_list = []
+                for image_id in status["image_ids"]:
+                    try:
+                        # Get each image info using the image manager
+                        image_info = ImageManager.get_image_info(image_id)
+                        if image_info:
+                            image_list.append(image_info)
+                    except Exception as e:
+                        logger.warning(f"Error getting image info for {image_id}: {str(e)}")
+
+                status["images"] = image_list
+            else:
+                # Fall back to the previous method of getting all job images
+                images = ImageManager.get_job_images(job_id)
+                status["images"] = images
 
         return jsonify(status)
 
@@ -139,6 +156,25 @@ def get_job_status(job_id):
     except Exception as e:
         logger.error(f"Error getting job status: {str(e)}")
         raise APIError("Failed to get job status", 500)
+
+@bp.route("/reset_queue", methods=["POST"])
+def reset_queue():
+    """Reset any stalled jobs to pending status"""
+    try:
+        reset_count = QueueManager.reset_stalled_jobs()
+
+        # Trigger queue processing to pick up reset jobs
+        if reset_count > 0 and hasattr(g, 'generator'):
+            g.generator._queue_event.set()
+
+        return jsonify({
+            "status": "success",
+            "reset_count": reset_count,
+            "message": f"Reset {reset_count} stalled jobs to pending status"
+        })
+    except Exception as e:
+        logger.error(f"Error resetting queue: {str(e)}")
+        raise APIError("Failed to reset queue", 500)
 
 @bp.route("/get_image/<image_id>", methods=["GET"])
 def get_image(image_id):

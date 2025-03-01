@@ -144,6 +144,22 @@ class QueueManager:
         # Extract error message for parsing
         error_message = job["error_message"] or ""
 
+        # Extract image IDs if they exist in the error_message
+        image_ids = []
+        if "IMAGE_IDS:" in error_message:
+            try:
+                # Extract and parse the image IDs
+                image_ids_part = error_message.split("IMAGE_IDS:")[1].strip()
+                # Remove any text after the JSON
+                if " " in image_ids_part:
+                    image_ids_part = image_ids_part.split(" ")[0]
+                image_ids = json.loads(image_ids_part)
+
+                # Remove the image IDs from the error message
+                error_message = error_message.split("IMAGE_IDS:")[0].strip()
+            except Exception as e:
+                logger.warning(f"Error parsing image IDs from error message: {e}")
+
         # Determine progress state more accurately
         progress = {
             "preparing": False,
@@ -195,7 +211,7 @@ class QueueManager:
             # Use a sensible default for current step if we can't determine it
             progress["step"] = 1
 
-        return {
+        result = {
             "id": job["id"],
             "status": job["status"],
             "model_id": job["model_id"],
@@ -208,6 +224,12 @@ class QueueManager:
             "message": error_message,
             "progress": progress
         }
+
+        # Add image IDs to the result if present
+        if image_ids:
+            result["image_ids"] = image_ids
+
+        return result
 
     @staticmethod
     def get_queue_status() -> Dict:
@@ -274,7 +296,7 @@ class QueueManager:
         }
 
     @staticmethod
-    def update_job_status(job_id: str, status: str, message: Optional[str] = None) -> None:
+    def update_job_status(job_id: str, status: str, message: Optional[str] = None, image_ids: List[str] = None) -> None:
         """Update the status of a job"""
         db = get_db()
         now = datetime.utcnow()
@@ -291,24 +313,54 @@ class QueueManager:
 
         update = updates[status]
         try:
-            if update["field"]:
-                db.execute(
-                    f"""
-                    UPDATE jobs
-                    SET status = ?, {update['field']} = ?, error_message = ?
-                    WHERE id = ?
-                    """,
-                    (update["status"], now, message, job_id)
-                )
+            # If we have image IDs and the status is completed, save them
+            if status == "completed" and image_ids:
+                # Store the image IDs in the job record
+                # We'll store them in the error_message field as a JSON string
+                # prefixed with "IMAGE_IDS:" to distinguish it from actual error messages
+                message_with_ids = message or ""
+                if message_with_ids:
+                    message_with_ids += " "
+                message_with_ids += f"IMAGE_IDS:{json.dumps(image_ids)}"
+
+                if update["field"]:
+                    db.execute(
+                        f"""
+                        UPDATE jobs
+                        SET status = ?, {update['field']} = ?, error_message = ?
+                        WHERE id = ?
+                        """,
+                        (update["status"], now, message_with_ids, job_id)
+                    )
+                else:
+                    db.execute(
+                        """
+                        UPDATE jobs
+                        SET status = ?, error_message = ?
+                        WHERE id = ?
+                        """,
+                        (update["status"], message_with_ids, job_id)
+                    )
             else:
-                db.execute(
-                    """
-                    UPDATE jobs
-                    SET status = ?, error_message = ?
-                    WHERE id = ?
-                    """,
-                    (update["status"], message, job_id)
-                )
+                # Standard update without image IDs
+                if update["field"]:
+                    db.execute(
+                        f"""
+                        UPDATE jobs
+                        SET status = ?, {update['field']} = ?, error_message = ?
+                        WHERE id = ?
+                        """,
+                        (update["status"], now, message, job_id)
+                    )
+                else:
+                    db.execute(
+                        """
+                        UPDATE jobs
+                        SET status = ?, error_message = ?
+                        WHERE id = ?
+                        """,
+                        (update["status"], message, job_id)
+                    )
             db.commit()
         except Exception as e:
             db.rollback()
@@ -530,3 +582,46 @@ class QueueManager:
             db.rollback()
             logger.error(f"Failed to clear all jobs: {str(e)}")
             return 0
+
+    @staticmethod
+    def reset_stalled_jobs() -> int:
+        """Reset any stalled processing jobs back to pending state
+
+        Returns the number of jobs that were reset
+        """
+        db = get_db()
+
+        # First get all processing jobs
+        processing_jobs = db.execute(
+            """
+            SELECT id
+            FROM jobs
+            WHERE status = 'processing'
+            """
+        ).fetchall()
+
+        if not processing_jobs:
+            return 0
+
+        reset_count = 0
+        for job in processing_jobs:
+            job_id = job["id"]
+            try:
+                # Reset the job to pending
+                db.execute(
+                    """
+                    UPDATE jobs
+                    SET status = 'pending', started_at = NULL, error_message = 'Job reset after being stalled'
+                    WHERE id = ?
+                    """,
+                    (job_id,)
+                )
+                db.commit()
+                reset_count += 1
+                logger.info(f"Reset stalled job {job_id} to pending status")
+            except Exception as e:
+                db.rollback()
+                logger.error(f"Failed to reset stalled job {job_id}: {str(e)}")
+
+        logger.info(f"Reset {reset_count} stalled jobs to pending status")
+        return reset_count

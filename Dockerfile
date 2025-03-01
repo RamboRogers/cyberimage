@@ -39,4 +39,4 @@ USER appuser
 EXPOSE 5050
 
 # Run with Gunicorn in production mode
-CMD ["gunicorn", "--workers=4", "--bind=0.0.0.0:5050", "run:app"]
+CMD ["gunicorn", "--workers=1", "--bind=0.0.0.0:5050", "run:app"]

@@ -6,7 +6,7 @@ import uuid
 import json
 from datetime import datetime
 import pytz
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, Union
 from PIL import Image
 from flask import current_app
 from app.utils.db import get_db
@@ -96,7 +96,7 @@ class ImageManager:
 
     @staticmethod
     def get_image_metadata(image_id: str) -> Optional[Dict]:
-        """Get image metadata"""
+        """Get metadata for an image"""
         db = get_db()
         result = db.execute(
             "SELECT metadata FROM images WHERE id = ?",
@@ -107,6 +107,30 @@ class ImageManager:
             return None
 
         return json.loads(result["metadata"])
+
+    @staticmethod
+    def get_image_info(image_id: str) -> Optional[Dict]:
+        """Get complete information for a single image by ID"""
+        db = get_db()
+        img = db.execute(
+            """
+            SELECT id, file_path, job_id, created_at, metadata
+            FROM images
+            WHERE id = ?
+            """,
+            (image_id,)
+        ).fetchone()
+
+        if img is None:
+            return None
+
+        return {
+            "id": img["id"],
+            "file_path": img["file_path"],
+            "job_id": img["job_id"],
+            "created_at": ImageManager._convert_to_local(img["created_at"]),
+            "metadata": json.loads(img["metadata"])
+        }
 
     @staticmethod
     def get_job_images(job_id: str) -> list:
