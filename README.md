@@ -13,7 +13,11 @@
 </tr>
 </table>
 
+<div align="center">
+
 🎨 Stable Diffusion | 🌍 Web Interface | ⚡ Fast | 🎯 Precise | 🖼️ Gallery | 🔄 Queue System | 📡 API
+
+</div>
 
 ## 🌟 Features
 
