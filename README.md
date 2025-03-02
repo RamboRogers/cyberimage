@@ -102,7 +102,7 @@ CIVITAI_API_KEY=
 
   1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/cyberimage.git
+git clone https://github.com/ramborogers/cyberimage.git
 cd cyberimage
 ```
 2. Use the run.sh script to start the application (easiest):
@@ -146,7 +146,7 @@ http://localhost:7860
 
 ![CyberImage](media/generate.png)
 
-![CyberImage](media/gallery.png)  
+![CyberImage](media/gallery.png)
 
 ![CyberImage](media/queue.png)
 
@@ -157,7 +157,7 @@ http://localhost:7860
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/cyberimage.git
+git clone https://github.com/ramborogers/cyberimage.git
 cd cyberimage
 ```
 
