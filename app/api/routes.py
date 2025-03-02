@@ -7,7 +7,7 @@ import json
 from flask import jsonify, request, send_file, current_app, g
 from werkzeug.exceptions import BadRequest, NotFound, InternalServerError
 from app.api import bp
-from app.models import AVAILABLE_MODELS
+from app.models import AVAILABLE_MODELS, DEFAULT_MODEL
 from app.utils.queue import QueueManager
 from app.utils.image import ImageManager
 from app.utils.rate_limit import rate_limit
@@ -44,7 +44,7 @@ def get_models():
     try:
         return jsonify({
             "models": AVAILABLE_MODELS,
-            "default": "flux-2"
+            "default": DEFAULT_MODEL
         })
     except Exception as e:
         logger.error(f"Error getting models: {str(e)}")

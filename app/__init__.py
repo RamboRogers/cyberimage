@@ -43,6 +43,7 @@ def create_app(test_config=None):
         MAX_PROMPT_LENGTH=500,
         DEFAULT_STEPS=30,
         DEFAULT_GUIDANCE_SCALE=7.5,
+        DEFAULT_MODEL="flux-2",  # Set flux-2 as the default model
     )
 
     # Force single process mode in production
@@ -113,6 +114,10 @@ def create_app(test_config=None):
     # Register admin blueprint
     from app.admin import bp as admin_bp
     app.register_blueprint(admin_bp)
+
+    # Register MCP blueprint
+    from app.api.mcp import mcp_bp
+    app.register_blueprint(mcp_bp, url_prefix="/api")
 
     # Health check endpoint
     @app.route("/health")

@@ -27,7 +27,146 @@ The API implements rate limiting with the following default settings:
 - 10 requests per hour per IP address
 - When limit is exceeded, the API returns a 429 status code with wait time information
 
-## Available Endpoints
+## Model Context Protocol (MCP) Support
+
+CyberImage now supports the [Model Context Protocol (MCP)](https://spec.modelcontextprotocol.io/specification/2024-11-05/) for AI systems to interact with the image generation capabilities. This enables AI assistants and other systems to generate images through a standardized interface.
+
+### MCP Endpoint
+
+The MCP endpoint is available at:
+
+```
+http://localhost:5050/api/mcp
+```
+
+### Supported MCP Methods
+
+| Method | Description |
+|--------|-------------|
+| `context.image_generation.models` | List available models |
+| `context.image_generation.generate` | Generate images based on a prompt |
+| `context.image_generation.status` | Check generation job status |
+
+### MCP Request Format
+
+All MCP requests follow the JSON-RPC 2.0 format:
+
+```json
+{
+    "jsonrpc": "2.0",
+    "method": "context.image_generation.METHOD_NAME",
+    "params": {
+        // Method parameters
+    },
+    "id": "request-id"
+}
+```
+
+### MCP Example: Generating an Image
+
+**Request:**
+
+```json
+{
+    "jsonrpc": "2.0",
+    "method": "context.image_generation.generate",
+    "params": {
+        "prompt": "A cyberpunk city at night with neon signs",
+        "negative_prompt": "blurry, text",
+        "model": "flux-2",
+        "settings": {
+            "num_images": 1,
+            "num_inference_steps": 30,
+            "guidance_scale": 7.5,
+            "height": 1024,
+            "width": 1024
+        }
+    },
+    "id": "gen-123"
+}
+```
+
+**Response:**
+
+```json
+{
+    "jsonrpc": "2.0",
+    "result": {
+        "job_id": "0c907066-985e-467b-8d11-07419060ef91",
+        "status": "pending",
+        "num_images": 1
+    },
+    "id": "gen-123"
+}
+```
+
+### MCP Example: Checking Job Status
+
+**Request:**
+
+```json
+{
+    "jsonrpc": "2.0",
+    "method": "context.image_generation.status",
+    "params": {
+        "job_id": "0c907066-985e-467b-8d11-07419060ef91"
+    },
+    "id": "status-123"
+}
+```
+
+**Response:**
+
+```json
+{
+    "jsonrpc": "2.0",
+    "result": {
+        "job_id": "0c907066-985e-467b-8d11-07419060ef91",
+        "status": "completed",
+        "model": "flux-2",
+        "prompt": "A cyberpunk city at night with neon signs",
+        "created_at": "2024-03-20T10:30:00Z",
+        "started_at": "2024-03-20T10:30:01Z",
+        "completed_at": "2024-03-20T10:31:00Z",
+        "progress": {
+            "preparing": false,
+            "loading_model": false,
+            "generating": false,
+            "saving": false,
+            "completed": true,
+            "failed": false,
+            "step": 30,
+            "total_steps": 30
+        },
+        "images": [
+            {
+                "id": "img_123456",
+                "url": "/api/get_image/img_123456",
+                "metadata": {
+                    "model_id": "flux-2",
+                    "prompt": "A cyberpunk city at night with neon signs",
+                    "negative_prompt": null,
+                    "settings": {
+                        "num_inference_steps": 30,
+                        "guidance_scale": 7.5,
+                        "height": 1024,
+                        "width": 1024
+                    }
+                }
+            }
+        ]
+    },
+    "id": "status-123"
+}
+```
+
+### MCP Example Client
+
+A Python example client for the MCP endpoint is included in the `examples/mcp_client_example.py` file.
+
+## RESTful API Endpoints
+
+The following RESTful API endpoints are available in addition to the MCP endpoint:
 
 ### 1. List Available Models
 Get a list of all available models and their configurations.
@@ -38,6 +177,10 @@ Get a list of all available models and their configurations.
 ```json
 {
     "models": {
+        "flux-2": {
+            "id": "black-forest-labs/FLUX.1-dev",
+            "description": "FP8 quantized version of FLUX-1 for memory efficiency"
+        },
         "flux-1": {
             "id": "black-forest-labs/FLUX.1-dev",
             "description": "FLUX base model"

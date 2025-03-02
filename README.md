@@ -15,7 +15,7 @@
 
 <div align="center">
 
-🎨 Stable Diffusion | 🌍 Web Interface | ⚡ Fast | 🎯 Precise | 🖼️ Gallery | 🔄 Queue System | 📡 API
+🎨 Stable Diffusion | 🌍 Web Interface | ⚡ Fast | 🎯 Precise | 🖼️ Gallery | 🔄 Queue System | 📡 API | 🤖 MCP Support
 
 </div>
 
@@ -35,8 +35,47 @@
 | 🚀 Fast generation | 🎮 Intuitive controls | 📑 Batch operations | 🏠 Local image storage |
 | 🧩 Model compatibility | 🔔 Notifications | 🏷️ Tagging system | 🔐 Secure file handling |
 | 🔄 Seamless workflow | 🌙 Dark mode support | 📅 Date organization | 🕵️ Privacy-focused design |
+| 🤖 **MCP Integration** | 🔌 **AI Accessibility** |  |  |
+| 🔗 AI assistant support | 🔄 JSON-RPC interface |  |  |
+| 🧩 Standardized protocol | 🧰 Example clients |  |  |
 
 </div>
+
+## 🤖 Model Context Protocol (MCP) Support
+
+CyberImage now implements the [Model Context Protocol (MCP)](https://spec.modelcontextprotocol.io/specification/2024-11-05/), enabling AI assistants and other tools to seamlessly generate images through a standardized interface.
+
+### What is MCP?
+
+MCP is an open protocol that enables AI systems to interact with external tools and capabilities in a standardized way. With MCP support, AI assistants can generate images directly through CyberImage using JSON-RPC calls.
+
+### Key MCP Features
+
+- **JSON-RPC 2.0 Interface**: Simple, standardized format for all requests
+- **Default Model**: Uses `flux-2` as the default model for optimal results
+- **Seamless Queue Integration**: Jobs from AI assistants are integrated into the same queue as web UI requests
+- **Progress Tracking**: AI systems can track generation progress in real-time
+- **Standard Format**: Follows the MCP specification for interoperability with any MCP-compatible AI system
+
+### Supported MCP Methods
+
+| Method | Description |
+|--------|-------------|
+| `context.image_generation.models` | List all available models |
+| `context.image_generation.generate` | Generate images based on a prompt |
+| `context.image_generation.status` | Check the status of a generation job |
+
+### Using the MCP Endpoint
+
+AI assistants can connect to the MCP endpoint at:
+
+```
+http://localhost:5050/api/mcp
+```
+
+For implementation examples, see the `examples/` directory:
+- `mcp_client_example.py`: General MCP client implementation
+- `ai_assistant_mcp_example.py`: Specialized client for AI assistants
 
 ## The Enhance/Enrich Button
 
@@ -189,6 +228,7 @@ python download_models.py
 - **Batch Size**: Generate multiple images
 
 ## 💡 Use Cases
+- **AI Assistant Integration**: Allow AI assistants to generate images based on user conversations
 - **Family Images**: My children love to use this
 - **Digital Art**: Create unique artwork
 - **Concept Design**: Generate design ideas
