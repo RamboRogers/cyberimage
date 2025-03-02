@@ -21,6 +21,8 @@
 
 ## 🌟 Features
 
+<div align="center">
+
 | 🎨 **Image Generation** | 🖥️ **Web Interface** | 🖼️ **Gallery Features** | ⚡ **Performance** |
 |------------------------|---------------------|------------------------|-------------------|
 | 🤖 State-of-the-art AI models | 🌃 Cyberpunk-themed UI | 📊 Multiple view options | 💾 Smart model caching |
@@ -34,7 +36,7 @@
 | 🧩 Model compatibility | 🔔 Notifications | 🏷️ Tagging system | 🔐 Secure file handling |
 | 🔄 Seamless workflow | 🌙 Dark mode support | 📅 Date organization | 🕵️ Privacy-focused design |
 
-
+</div>
 ## The Enhance/Enrich Button
 
 The Enrich button uses the openai api to enhance the image. It uses the openai api key and the openai model to enhance the image. The openai model is the same as the model used for generation.
