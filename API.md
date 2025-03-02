@@ -86,7 +86,7 @@ Submit a new image generation request.
 - `model_id` (required): One of the available model IDs ("flux-1", "flux-2", "sd-3.5", "flux-abliterated")
 - `prompt` (required): Text description of the image to generate (max 500 characters)
 - `negative_prompt` (optional): Text description of what to avoid in the image (max 500 characters)
-  - Note: Negative prompts are only supported by certain models (e.g., SD 3.5)
+  - Note: Negative prompts are only supported by SD 3.5 model
   - For Flux models, this parameter will be gracefully ignored
 - `settings` (optional): Generation parameters
   - `num_images`: Number of images to generate per job (default: 1, max: 8)
@@ -96,10 +96,10 @@ Submit a new image generation request.
   - `width`: Image width in pixels (default: 1024)
   - `max_sequence_length`: Maximum prompt length (default: 512)
 
-**Model-Specific Parameters:**
-- SD 3.5 specific parameters:
-  - `callback` and `callback_steps`: Only supported by SD 3.5, not by Flux models
+**Model-Specific Behavior:**
 - Flux models don't support negative prompts (parameter is ignored)
+- All models support the same standard generation parameters
+- Progress tracking is done at the job level, not with individual model steps
 
 **Response:**
 ```json
