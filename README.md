@@ -144,6 +144,14 @@ docker run -d \
 http://localhost:7860
 ```
 
+![CyberImage](media/generate.png)
+
+![CyberImage](media/gallery.png)  
+
+![CyberImage](media/queue.png)
+
+![CyberImage](media/single.png)
+
 
 ### Local Installation
 
