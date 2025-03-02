@@ -37,6 +37,7 @@
 | 🔄 Seamless workflow | 🌙 Dark mode support | 📅 Date organization | 🕵️ Privacy-focused design |
 
 </div>
+
 ## The Enhance/Enrich Button
 
 The Enrich button uses the openai api to enhance the image. It uses the openai api key and the openai model to enhance the image. The openai model is the same as the model used for generation.
