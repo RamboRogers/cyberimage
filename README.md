@@ -180,28 +180,6 @@ python download_models.py
 - **Visual Inspiration**: Explore creative concepts
 - **Content Creation**: Generate visual content
 
-## 🎯 Features in Detail
-
-### Queue Management
-- Efficient job scheduling
-- Real-time queue status
-- Smart resource allocation
-- Progress tracking
-- Job prioritization
-
-### Gallery Management
-- Image organization
-- Metadata storage
-- Quick filtering
-- Batch operations
-- Export functionality
-
-### User Interface
-- Intuitive controls
-- Real-time feedback
-- Responsive design
-- Keyboard shortcuts
-- Dark theme
 
 ## 🔧 Configuration
 
@@ -240,15 +218,26 @@ CIVITAI_API_KEY=
 4. Push to the branch
 5. Create a Pull Request
 
+<div align="center">
+
 ## ⚖️ License
 
-CyberImage is licensed under the GNU General Public License v3.0.
+<p>
+NetVentory is licensed under the GNU General Public License v3.0 (GPLv3).<br>
+<em>Free Software</em>
+</p>
 
-## 🔗 Connect
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg?style=for-the-badge)](https://www.gnu.org/licenses/gpl-3.0)
 
-- GitHub: @ramborogers
-- Twitter: @rogerscissp
-- Website: https://matthewrogers.org
+### Connect With Me 🤝
+
+[![GitHub](https://img.shields.io/badge/GitHub-RamboRogers-181717?style=for-the-badge&logo=github)](https://github.com/RamboRogers)
+[![Twitter](https://img.shields.io/badge/Twitter-@rogerscissp-1DA1F2?style=for-the-badge&logo=twitter)](https://x.com/rogerscissp)
+[![Website](https://img.shields.io/badge/Web-matthewrogers.org-00ADD8?style=for-the-badge&logo=google-chrome)](https://matthewrogers.org)
+
+![RamboRogers](https://github.com/RamboRogers/netventory/raw/master/media/ramborogers.png)
+
+</div>
 
 ---
 
