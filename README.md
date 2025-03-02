@@ -2,57 +2,62 @@
 
 **AI Image Generation Platform**
 
-🎨 Stable Diffusion | 🌍 Web Interface | ⚡ Fast | 🎯 Precise | 🖼️ Gallery | 🔄 Queue System
+<table>
+<tr>
+<td><img src="media/generate.png"></td>
+<td><img src="media/gallery.png"></td>
+</tr>
+<tr>
+<td><img src="media/queue.png"></td>
+<td><img src="media/single.png"></td>
+</tr>
+</table>
+
+🎨 Stable Diffusion | 🌍 Web Interface | ⚡ Fast | 🎯 Precise | 🖼️ Gallery | 🔄 Queue System | 📡 API
 
 ## 🌟 Features
 
-### Image Generation
-- Multiple state-of-the-art AI models
-- Customizable generation parameters
-- Negative prompt support
-- Batch image generation
-- Real-time generation progress
-- Smart queue management
+| 🎨 **Image Generation** | 🖥️ **Web Interface** | 🖼️ **Gallery Features** | ⚡ **Performance** |
+|------------------------|---------------------|------------------------|-------------------|
+| 🤖 State-of-the-art AI models | 🌃 Cyberpunk-themed UI | 📊 Multiple view options | 💾 Smart model caching |
+| 🎛️ Customizable parameters | ⏱️ Real-time status updates | 🔍 Detailed image modal | 🧠 Memory optimization |
+| 🚫 Negative prompt support | 🖱️ Interactive gallery | ⬇️ Quick download actions | 🔄 Efficient queue system |
+| 📦 Batch image generation | 📱 Mobile-responsive design | 🗑️ Easy deletion options | 🏃‍♂️ Background processing |
+| 📈 Real-time progress | ⌨️ Keyboard shortcuts | 📋 Copy prompt feature | 📊 Progress tracking |
+| 🧠 Smart queue management | 📝 Metadata viewing | 🔄 Infinite scroll loading | 🔒 **Security & Privacy** |
+| 🎯 Precise control | 🌈 Beautiful UI | 🔍 Search and filtering | 🛡️ No data collection |
+| 🚀 Fast generation | 🎮 Intuitive controls | 📑 Batch operations | 🏠 Local image storage |
+| 🧩 Model compatibility | 🔔 Notifications | 🏷️ Tagging system | 🔐 Secure file handling |
+| 🔄 Seamless workflow | 🌙 Dark mode support | 📅 Date organization | 🕵️ Privacy-focused design |
 
-### Web Interface
-- Beautiful cyberpunk-themed UI
-- Real-time status updates
-- Interactive image gallery
-- Mobile-responsive design
-- Keyboard shortcuts
-- Image metadata viewing
 
-### Gallery Features
-- Grid, list, and compact views
-- Image details modal
-- Quick actions (download, delete, copy prompt)
-- Infinite scroll loading
-- Search and filtering
-- Batch operations
+## The Enhance/Enrich Button
 
-### Performance
-- Smart model caching
-- Memory-optimized pipeline
-- Efficient queue system
-- Background job processing
-- Real-time progress tracking
+The Enrich button uses the openai api to enhance the image. It uses the openai api key and the openai model to enhance the image. The openai model is the same as the model used for generation.
 
-### Security & Privacy
-- No data collection
-- Local image storage
-- Secure file handling
-- Privacy-focused design
+This is my favorite feature, it allows you to take a basic image prompt and enhance it to make it better using a number of different techniques shared with myself by an AI expert.
+
+<table>
+<tr>
+<td><img src="media/basic.png"></td>
+<td><img src="media/enrich.png"></td>
+</tr>
+</table>
+
 
 ## ⚡ Installation
 
 ### Requirements
-- Python 3.12+ (for local installation)
-- CUDA-capable GPU
-- 16GB+ RAM recommended
-- 24GB+ VRAM recommended
-- 250GB+ disk space for models
-- Docker & Docker Compose (for containerized installation)
-- Huggingface API Key (free! for downloading models)
+
+| Requirement | Specification |
+|-------------|---------------|
+| Python | 3.12 (for local installation) |
+| GPU | CUDA-capable |
+| RAM | 16GB+ recommended |
+| VRAM | 24GB+ recommended |
+| Disk Space | 250GB+ for models |
+| Container | Docker & Docker Compose (for containerized installation) |
+| API | Huggingface API Key (free! for downloading models) |
 
 ### Environment Setup
 1. Copy the example environment file:
@@ -88,7 +93,18 @@ CIVITAI_API_KEY=
 
 ### Docker Installation (Recommended)
 
-1. Using docker-compose (easiest):
+  1. Clone the repository:
+```bash
+git clone https://github.com/yourusername/cyberimage.git
+cd cyberimage
+```
+2. Use the run.sh script to start the application (easiest):
+```bash
+# This will start the application in a container
+./run.sh start
+```
+
+3. Using docker-compose :
 ```bash
 # Start the application
 docker-compose up -d
@@ -100,7 +116,7 @@ docker-compose logs -f
 docker-compose down
 ```
 
-2. Using Docker directly:
+3. Using Docker directly:
 ```bash
 # Build the image
 docker build -t cyberimage .
@@ -109,12 +125,18 @@ docker build -t cyberimage .
 docker run -d \
   --name cyberimage \
   --gpus all \
-  -p 5000:5000 \
+  -p 7860:5050 \
   -v $(pwd)/models:/app/models \
   -v $(pwd)/images:/app/images \
   --env-file .env \
   cyberimage
 ```
+
+4. Open in browser:
+```
+http://localhost:7860
+```
+
 
 ### Local Installation
 
@@ -142,44 +164,6 @@ pip install -r requirements.txt
 python download_models.py
 ```
 
-### Quick Start Script
-You can use the provided `run.sh` script for common operations:
-```bash
-# Make the script executable
-chmod +x run.sh
-
-# Start the application
-./run.sh start
-
-# Stop the application
-./run.sh stop
-
-# View logs
-./run.sh logs
-
-# Update dependencies
-./run.sh update
-
-# Clean temporary files
-./run.sh clean
-```
-
-## 🚀 Usage
-
-1. Start the server:
-```bash
-# Using run.sh
-./run.sh start
-
-# Or manually
-python run.py
-```
-
-2. Access the web interface:
-```
-http://localhost:5000
-```
-
 ### Generation Parameters
 - **Model**: Choose from multiple AI models
 - **Prompt**: Describe your desired image
@@ -190,6 +174,7 @@ http://localhost:5000
 - **Batch Size**: Generate multiple images
 
 ## 💡 Use Cases
+- **Family Images**: My children love to use this
 - **Digital Art**: Create unique artwork
 - **Concept Design**: Generate design ideas
 - **Visual Inspiration**: Explore creative concepts
@@ -220,34 +205,32 @@ http://localhost:5000
 
 ## 🔧 Configuration
 
-Key settings in `config.py`:
+Key settings in `.env`:
 ```python
 # Model Settings
-MODEL_CACHE_SIZE = 1
-CUDA_DEVICE = "cuda"
-PRECISION = "float16"
 
-# Queue Settings
-MAX_QUEUE_SIZE = 100
-JOB_TIMEOUT = 300
+# Don't change these unless you are NOT using docker
+MODEL_FOLDER=./models
+IMAGES_FOLDER=./images
 
-# Storage Settings
-IMAGE_STORAGE = "images/"
-MODEL_STORAGE = "models/"
+# For usage with docker (models will grow > 250GB)
+EXTERNAL_MODEL_FOLDER=
+EXTERNAL_IMAGES_FOLDER=
+
+# Huggingface API Key (free! for downloading models)
+HF_TOKEN=
+
+# OpenAI API Key (for enrich prompt), ollama works fine with 127.0.0.1:11434/v1 as the endpoint and the openai api key as the key, or host.docker.internal:11434/v1 as the endpoint and the openai api key as the key if ollama is running on the host machine. The model needs to be something in 127.0.0.1:11434/v1/models on your system.
+OPENAI_ENDPOINT=
+OPENAI_API_KEY=
+
+# OpenAI Model (for enrich prompt button to work)
+OPENAI_MODEL=
+
+# Civitai API Key (optional, for downloading models) (not configured currently)
+CIVITAI_API_KEY=
 ```
 
-## ⌨️ Keyboard Shortcuts
-
-| Action | Shortcut |
-|--------|----------|
-| Focus Search | `/` |
-| Next Image | `j` |
-| Previous Image | `k` |
-| Copy Prompt | `c` |
-| Download | `d` |
-| Toggle Selection | `Space` |
-| Select All | `a` |
-| Deselect All | `Shift + a` |
 
 ## 🤝 Contributing
 
@@ -259,7 +242,7 @@ MODEL_STORAGE = "models/"
 
 ## ⚖️ License
 
-CyberImage is licensed under the MIT License.
+CyberImage is licensed under the GNU General Public License v3.0.
 
 ## 🔗 Connect
 
