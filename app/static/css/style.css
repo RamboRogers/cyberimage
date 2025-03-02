@@ -1768,3 +1768,116 @@ select.enrich-style:focus {
     box-shadow: 0 0 0 2px var(--neon-green);
     outline: none;
 }
+
+/* Footer Styling */
+footer {
+    margin-top: 3rem;
+    padding: 1.5rem 0;
+    border-top: 1px solid var(--neon-green-dim);
+    background: rgba(0, 0, 0, 0.85);
+    backdrop-filter: blur(10px);
+    position: relative;
+    overflow: hidden;
+}
+
+footer::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: linear-gradient(90deg,
+        transparent 0%,
+        var(--neon-green) 50%,
+        transparent 100%);
+    box-shadow: 0 0 15px var(--neon-green), 0 0 5px var(--neon-green);
+}
+
+footer .status-bar {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 0.75rem 0;
+    gap: 1.5rem;
+    font-family: 'Orbitron', monospace;
+    font-size: 0.9rem;
+}
+
+footer .current-status {
+    color: var(--neon-green);
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+footer .current-status::before {
+    content: '•';
+    font-size: 1.5rem;
+    animation: pulse 2s infinite;
+}
+
+footer .worker-status {
+    color: rgba(255, 255, 255, 0.7);
+}
+
+footer .branding {
+    text-align: center;
+    padding: 1rem 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+footer .branding p {
+    color: rgba(255, 255, 255, 0.8);
+    font-size: 0.9rem;
+    letter-spacing: 0.5px;
+}
+
+footer .branding p:first-child {
+    color: var(--neon-green);
+    font-weight: 500;
+    letter-spacing: 1px;
+    margin-bottom: 0.25rem;
+}
+
+footer .branding a {
+    color: var(--neon-green);
+    text-decoration: none;
+    transition: all 0.2s ease;
+    position: relative;
+}
+
+footer .branding a::after {
+    content: '';
+    position: absolute;
+    bottom: -2px;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: var(--neon-green);
+    transform: scaleX(0);
+    transition: transform 0.3s ease;
+}
+
+footer .branding a:hover {
+    text-shadow: 0 0 8px var(--neon-green);
+}
+
+footer .branding a:hover::after {
+    transform: scaleX(1);
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+/* Footer mobile responsiveness */
+@media (max-width: 768px) {
+    footer .status-bar {
+        flex-direction: column;
+        gap: 0.5rem;
+    }
+}
