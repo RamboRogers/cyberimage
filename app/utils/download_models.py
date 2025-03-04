@@ -11,58 +11,23 @@ from flask import current_app
 
 # Model configurations based on actual repo structure
 MODELS = {
-    "flux-2": {
-        "repo": "black-forest-labs/FLUX.1-dev",
-        "fp8_weights": {
-            "repo": "Comfy-Org/flux1-dev",
-            "file": "flux1-dev-fp8.safetensors"
-        },
-        "description": "FLUX model optimized for memory efficiency (FP8)",
-        "requires_auth": True,
-        "source": "huggingface",
-        "files": [
-            "model_index.json",
-            "ae.safetensors",
-            "flux1-dev.safetensors"
-        ],
-        "local_path": "models/flux-2"
-    },
     "flux-1": {
         "repo": "black-forest-labs/FLUX.1-dev",
         "description": "FLUX base model",
         "requires_auth": True,
-        "source": "huggingface",
-        "files": [
-            "model_index.json",
-            "ae.safetensors",
-            "flux1-dev.safetensors"
-        ]
+        "source": "huggingface"
     },
     "sd-3.5": {
         "repo": "stabilityai/stable-diffusion-3.5-large",
         "description": "Stable Diffusion 3.5",
         "requires_auth": True,
-        "source": "huggingface",
-        "files": [
-            "model_index.json",
-            "sd3.5_large.safetensors"
-        ]
+        "source": "huggingface"
     },
     "flux-abliterated": {
         "repo": "aoxo/flux.1dev-abliteratedv2",
         "description": "FLUX Abliterated variant",
         "requires_auth": True,
-        "source": "huggingface",
-        "files": [
-            "model_index.json",
-            "transformer/config.json",
-            "transformer/diffusion_pytorch_model-00001-of-00003.safetensors",
-            "transformer/diffusion_pytorch_model-00002-of-00003.safetensors",
-            "transformer/diffusion_pytorch_model-00003-of-00003.safetensors",
-            "transformer/diffusion_pytorch_model.safetensors.index.json",
-            "vae/config.json",
-            "vae/diffusion_pytorch_model.safetensors"
-        ]
+        "source": "huggingface"
     }
 }
 
@@ -80,7 +45,7 @@ def print_status(message: str, status: str = "info") -> None:
     sys.stdout.flush()
 
 def download_model(models_dir: Path, model_name: str, model_info: dict) -> bool:
-    """Download a specific model using either HuggingFace CLI or Civitai API"""
+    """Download a complete model folder using HuggingFace CLI"""
     try:
         print_status(f"Downloading {model_name}: {model_info['description']}", "pending")
 
@@ -91,62 +56,30 @@ def download_model(models_dir: Path, model_name: str, model_info: dict) -> bool:
         if temp_path.exists():
             shutil.rmtree(temp_path)
 
-        # Special handling for flux-2 - copy from flux-1
-        if model_name == "flux-2":
-            flux1_path = models_dir / "flux-1"
-            if not flux1_path.exists():
-                print_status("flux-1 model not found - needed as base for flux-2", "error")
-                return False
+        # Create temp directory
+        temp_path.mkdir(exist_ok=True)
+        env = os.environ.copy()
 
-            # Make sure temp directory is completely clean
-            if temp_path.exists():
-                print_status("Cleaning up temporary directory...", "info")
-                shutil.rmtree(temp_path)
+        # Disable HF_TRANSFER to avoid download errors
+        env["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
 
-            # Also clean up target if it exists
-            if model_path.exists():
-                print_status("Cleaning up existing model directory...", "info")
-                shutil.rmtree(model_path)
+        # For HuggingFace models - download the entire folder
+        if model_info["source"] == "huggingface":
+            # Simple approach: download everything at once
+            cmd = [
+                "huggingface-cli", "download",
+                model_info["repo"],
+                "--local-dir", str(temp_path),
+                "--local-dir-use-symlinks", "False"
+            ]
 
-            # Copy flux-1 structure to temp directory
-            print_status("Copying base model structure from flux-1...", "info")
-            shutil.copytree(flux1_path, temp_path, dirs_exist_ok=True)
-
-            # Download FP8 weights
-            fp8_info = model_info["fp8_weights"]
-            print_status(f"Downloading FP8 weights from {fp8_info['repo']}...", "info")
-
-            # Download FP8 weights using snapshot-download for direct file access
-            cmd = ["huggingface-cli", "download", "--repo-type=model",
-                  fp8_info["repo"],
-                  "--local-dir", str(temp_path),
-                  "--local-dir-use-symlinks", "False"]
-
-            env = os.environ.copy()
-            env["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
-
-            result = subprocess.run(cmd, env=env, check=True, capture_output=True, text=True)
+            print_status(f"Downloading complete model: {model_name}...", "info")
+            result = subprocess.run(cmd, env=env, capture_output=True, text=True, check=False)
 
             if result.returncode != 0:
-                print_status(f"Failed to download FP8 weights: {result.stderr}", "error")
-                shutil.rmtree(temp_path)
-                return False
-
-            # Verify the FP8 file exists
-            fp8_path = temp_path / fp8_info["file"]
-            if not fp8_path.exists():
-                print_status(f"FP8 weights file not found at {fp8_path}", "error")
-                shutil.rmtree(temp_path)
-                return False
-
-            # Replace the model weights with FP8 version
-            target_path = temp_path / "flux1-dev.safetensors"
-            try:
-                shutil.move(str(fp8_path), str(target_path))
-                print_status("Successfully moved FP8 weights to correct location", "success")
-            except Exception as e:
-                print_status(f"Failed to move FP8 weights: {str(e)}", "error")
-                shutil.rmtree(temp_path)
+                print_status(f"Failed to download model: {result.stderr}", "error")
+                if temp_path.exists():
+                    shutil.rmtree(temp_path)
                 return False
 
             # Move to final location
@@ -156,13 +89,9 @@ def download_model(models_dir: Path, model_name: str, model_info: dict) -> bool:
             print_status(f"Successfully downloaded {model_name}", "success")
             return True
 
-        # Normal download path for other models
-        temp_path.mkdir(exist_ok=True)
-        env = os.environ.copy()
-        env["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
-
-        if model_info["source"] == "civitai":
-            # Extract model ID from repo string (format: "civitai:123456")
+        # Keep Civitai download logic as is
+        elif model_info["source"] == "civitai":
+            # Extract model ID from repo string
             model_id = model_info["repo"].split(":")[1]
 
             # Get Civitai API key from environment
@@ -206,88 +135,11 @@ def download_model(models_dir: Path, model_name: str, model_info: dict) -> bool:
             print_status(f"Successfully downloaded {model_name}", "success")
             return True
 
-        else:  # Hugging Face download
-            # First download base model structure (excluding safetensors)
-            cmd = ["huggingface-cli", "download",
-                  model_info["repo"],
-                  "--local-dir", str(temp_path),
-                  "--include", "*.json",  # Get all config files
-                  "--include", "*.txt",   # Get any text files
-                  "--include", "*.bin"]   # Get any binary files
-
-            print_status(f"Downloading {model_name} base structure...", "info")
-            result = subprocess.run(cmd, env=env, check=True, capture_output=True, text=True)
-
-            if result.returncode != 0:
-                print_status(f"Failed to download base model: {result.stderr}", "error")
-                shutil.rmtree(temp_path)
-                return False
-
-            # If this model has FP8 weights, download them
-            if "fp8_weights" in model_info:
-                fp8_info = model_info["fp8_weights"]
-                print_status(f"Downloading FP8 weights from {fp8_info['repo']}...", "info")
-
-                # Download FP8 weights using snapshot-download for direct file access
-                cmd = ["huggingface-cli", "download", "--repo-type=model",
-                      fp8_info["repo"],
-                      "--local-dir", str(temp_path),
-                      "--local-dir-use-symlinks", "False"]
-
-                result = subprocess.run(cmd, env=env, check=True, capture_output=True, text=True)
-
-                if result.returncode != 0:
-                    print_status(f"Failed to download FP8 weights: {result.stderr}", "error")
-                    shutil.rmtree(temp_path)
-                    return False
-
-                # Verify the FP8 file exists
-                fp8_path = temp_path / fp8_info["file"]
-                if not fp8_path.exists():
-                    print_status(f"FP8 weights file not found at {fp8_path}", "error")
-                    shutil.rmtree(temp_path)
-                    return False
-
-                # Move FP8 weights to correct location
-                target_path = temp_path / "flux1-dev.safetensors"
-                try:
-                    shutil.move(str(fp8_path), str(target_path))
-                    print_status("Successfully moved FP8 weights to correct location", "success")
-                except Exception as e:
-                    print_status(f"Failed to move FP8 weights: {str(e)}", "error")
-                    shutil.rmtree(temp_path)
-                    return False
-
-            # Download any remaining files (like ae.safetensors)
-            cmd = ["huggingface-cli", "download",
-                  model_info["repo"],
-                  "--local-dir", str(temp_path),
-                  "--include", "ae.safetensors"]
-
-            print_status("Downloading additional model files...", "info")
-            result = subprocess.run(cmd, env=env, check=True, capture_output=True, text=True)
-
-            # Move to final location
-            if model_path.exists():
-                shutil.rmtree(model_path)
-            temp_path.rename(model_path)
-            print_status(f"Successfully downloaded {model_name}", "success")
-            return True
-
-    except subprocess.CalledProcessError as e:
-        print_status(f"Failed to download {model_name}: {e.stderr}", "error")
-        if temp_path.exists():
-            shutil.rmtree(temp_path)
-        return False
     except Exception as e:
         print_status(f"Failed to download {model_name}: {str(e)}", "error")
         if temp_path.exists():
             shutil.rmtree(temp_path)
         return False
-
-def check_model_files(model_path: Path, files: list) -> bool:
-    """Check if all required files exist for a model"""
-    return all((model_path / file).exists() for file in files)
 
 def acquire_lock(lock_path):
     """Try to acquire a lock file"""
@@ -325,13 +177,13 @@ def download_all_models():
         for model_name, model_info in MODELS.items():
             model_path = models_dir / model_name
 
-            # Check if model directory exists and has all required files
-            if model_path.exists() and check_model_files(model_path, model_info["files"]):
+            # Simply check if the model directory exists
+            if model_path.exists():
                 print_status(f"Model {model_name} already exists, skipping...", "info")
                 continue
 
             # If we get here, the model needs to be downloaded
-            print_status(f"Model {model_name} is missing or incomplete", "warning")
+            print_status(f"Model {model_name} is missing", "warning")
             models_to_download[model_name] = model_info
 
         if not models_to_download:

@@ -239,15 +239,7 @@ class ModelManager:
 
                     return pipe
 
-                if model_key == "flux-2":
-                    pipe = FluxPipeline.from_pretrained(
-                        model_path,
-                        **model_config
-                    )
-                    pipe = apply_memory_optimizations(pipe)
-                    logger.info(f"Loaded FLUX-2 model with CPU offloading")
-
-                elif model_key == "flux-1":
+                if model_key == "flux-1":
                     pipe = FluxPipeline.from_pretrained(
                         model_path,
                         **model_config

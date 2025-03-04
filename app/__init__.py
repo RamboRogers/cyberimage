@@ -40,10 +40,10 @@ def create_app(test_config=None):
         ENABLE_XFORMERS=True,  # Enable memory efficient attention
         USE_HALF_PRECISION=True,  # Use FP16 for models when possible
         CLEANUP_INTERVAL=3600,  # Cleanup stalled jobs every hour
-        MAX_PROMPT_LENGTH=500,
+        MAX_PROMPT_LENGTH=800,
         DEFAULT_STEPS=30,
         DEFAULT_GUIDANCE_SCALE=7.5,
-        DEFAULT_MODEL="flux-2",  # Set flux-2 as the default model
+        DEFAULT_MODEL="flux-1",  # Updated default model
     )
 
     # Force single process mode in production

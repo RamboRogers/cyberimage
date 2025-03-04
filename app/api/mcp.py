@@ -15,7 +15,7 @@ mcp_bp = Blueprint('mcp', __name__)
 # Configure logger
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "flux-2"
+DEFAULT_MODEL = "flux-1"
 
 @mcp_bp.route("/mcp", methods=["POST"])
 def handle_mcp():

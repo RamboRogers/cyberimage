@@ -4,11 +4,6 @@ Model Definitions for CyberImage
 from typing import Dict, Any
 
 AVAILABLE_MODELS = {
-    "flux-2": {
-        "id": "black-forest-labs/FLUX.1-dev",
-        "description": "FP8 quantized version of FLUX-1 for memory efficiency",
-        "type": "flux"
-    },
     "flux-1": {
         "id": "black-forest-labs/FLUX.1-dev",
         "description": "High-quality image generation model optimized for detailed outputs",
@@ -27,4 +22,4 @@ AVAILABLE_MODELS = {
 }
 
 # Set the default model
-DEFAULT_MODEL = "flux-2"
+DEFAULT_MODEL = "flux-1"
