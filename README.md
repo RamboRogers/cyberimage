@@ -264,6 +264,85 @@ OPENAI_MODEL=
 CIVITAI_API_KEY=
 ```
 
+## 🖼️ Managing Models
+
+CyberImage uses environment variables to configure models. You can easily add, remove, or modify models by editing the `.env` file.
+
+### Model Configuration Format
+
+Models are defined using the following format:
+
+```
+MODEL_<N>=<name>;<repo>;<description>;<source>;<requires_auth>
+```
+
+Where:
+- `<N>`: Numerical index (1, 2, 3, etc.)
+- `<name>`: Unique identifier for the model (used as directory name)
+- `<repo>`: HuggingFace repository path or model identifier
+- `<description>`: Human-readable description
+- `<source>`: Source platform (huggingface, civitai, etc.)
+- `<requires_auth>`: Whether authentication is required (true/false)
+
+### Adding Models
+
+To add a new model, simply add a new line to your `.env` file with an unused index:
+
+```
+MODEL_1=flux-1;black-forest-labs/FLUX.1-dev;FLUX base model;huggingface;true
+MODEL_2=sd-3.5;stabilityai/stable-diffusion-3.5-large;Stable Diffusion 3.5;huggingface;true
+MODEL_3=animagine-xl;cagliostrolab/animagine-xl-4.0;Animagine XL;huggingface;true
+```
+
+### Disabling Models
+
+You can disable a model's download without removing it from the configuration:
+
+```
+MODEL_3=animagine-xl;cagliostrolab/animagine-xl-4.0;Animagine XL;huggingface;true
+DOWNLOAD_MODEL_3=false
+```
+
+This keeps the model in the UI but prevents it from being downloaded automatically.
+
+### Removing Models
+
+To completely remove a model, simply delete or comment out its configuration line in the `.env` file:
+
+```
+MODEL_1=flux-1;black-forest-labs/FLUX.1-dev;FLUX base model;huggingface;true
+MODEL_2=sd-3.5;stabilityai/stable-diffusion-3.5-large;Stable Diffusion 3.5;huggingface;true
+# MODEL_3=animagine-xl;cagliostrolab/animagine-xl-4.0;Animagine XL;huggingface;true
+```
+
+### Model Type Detection
+
+CyberImage automatically detects the model type based on the model name:
+- Names containing "flux" are treated as FLUX models
+- Names containing "sd-3" are treated as SD3 models
+- Names containing "xl" or "sdxl" are treated as SDXL models
+- Names containing "animagine" are treated as SDXL architecture models
+
+### Example Configuration
+
+Here's a complete example with multiple models:
+
+```
+# Default models
+MODEL_1=flux-1;black-forest-labs/FLUX.1-dev;FLUX base model;huggingface;true
+MODEL_2=sd-3.5;stabilityai/stable-diffusion-3.5-large;Stable Diffusion 3.5;huggingface;true
+MODEL_3=flux-abliterated;aoxo/flux.1dev-abliteratedv2;FLUX Abliterated variant;huggingface;true
+
+# SDXL models
+MODEL_4=juggernaut-xl;ckpt/juggernaut-xl;Juggernaut XL;huggingface;true
+MODEL_5=animagine-xl;cagliostrolab/animagine-xl-4.0;Animagine XL;huggingface;true
+
+# Disable download for large models you don't need right now
+DOWNLOAD_MODEL_4=false
+```
+
+After changing model configurations, restart the application to apply the changes.
+
 
 ## 🤝 Contributing
 
