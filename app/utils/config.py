@@ -36,6 +36,17 @@ def parse_model_config() -> Dict[str, Dict[str, Any]]:
             "model_index.json",
             "sd3.5_large.safetensors"
         ],
+        "sdxl": [
+            "model_index.json",
+            "vae/diffusion_pytorch_model.safetensors"
+        ],
+        "animagine-xl": [
+            "model_index.json",
+            "unet/diffusion_pytorch_model.safetensors",
+            "vae/diffusion_pytorch_model.safetensors",
+            "text_encoder/model.safetensors",
+            "text_encoder_2/model.safetensors"
+        ],
         "flux-abliterated": [
             "model_index.json",
             "transformer/config.json",
@@ -96,6 +107,10 @@ def parse_model_config() -> Dict[str, Dict[str, Any]]:
                     model_type = "flux"
                 elif "sd-3" in name.lower():
                     model_type = "sd3"
+                elif "animagine" in name.lower():
+                    model_type = "sdxl"  # Animagine XL uses SDXL architecture
+                elif "xl" in name.lower() or "sdxl" in name.lower():
+                    model_type = "sdxl"
 
                 # Get appropriate file list based on model name or type
                 files = []
@@ -185,7 +200,10 @@ def get_available_models() -> Dict[str, Dict[str, Any]]:
 
     # Add display information and standardize format for UI
     for name, config in models.items():
-        models[name]["id"] = name
+        # Set the model ID - use the model name as the ID
+        models[name]["id"] = config.get("repo", name)
+
+        # Set display name
         models[name]["name"] = config.get("display_name", name)
 
     return models

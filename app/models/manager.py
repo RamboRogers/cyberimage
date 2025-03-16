@@ -15,6 +15,7 @@ from threading import Lock
 from flask import current_app
 import time
 import threading
+from pathlib import Path
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -146,39 +147,109 @@ class ModelManager:
 
     def load_sd_pipeline(self, model_key: str) -> StableDiffusion3Pipeline:
         """Load SD 3.5 with proper configuration"""
-        model_id = AVAILABLE_MODELS[model_key]["id"]
+        model_config = AVAILABLE_MODELS[model_key]
+        model_repo = model_config["repo"]  # Use the repo field from config, not id
 
-        logger.info(f"Loading SD 3.5 model")
+        # First check if we have a local path for this model
+        model_path = os.path.join(current_app.config["MODELS_PATH"], model_key)
+        if os.path.exists(model_path):
+            logger.info(f"Loading SD 3.5 model from local path: {model_path}")
 
-        # Configure 4-bit quantization
-        nf4_config = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_compute_dtype=torch.float16
-        )
+            # Configure 4-bit quantization
+            nf4_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_compute_dtype=torch.float16
+            )
 
-        # Load transformer with quantization
-        transformer = SD3Transformer2DModel.from_pretrained(
-            model_id,
-            subfolder="transformer",
-            quantization_config=nf4_config,
-            torch_dtype=torch.float16,
-            cache_dir="models/sd-3.5"
-        )
+            # Load transformer with quantization
+            logger.debug(f"Loading transformer from local path: {model_path}/transformer")
+            transformer = SD3Transformer2DModel.from_pretrained(
+                model_path,
+                subfolder="transformer",
+                quantization_config=nf4_config,
+                torch_dtype=torch.float16,
+                local_files_only=True  # Enforce using only local files
+            )
 
-        # Load full pipeline
-        pipeline = StableDiffusion3Pipeline.from_pretrained(
-            model_id,
-            transformer=transformer,
-            torch_dtype=torch.float16,
-            cache_dir="models/sd-3.5"
-        )
+            # Load full pipeline
+            logger.debug(f"Loading full SD3 pipeline from local path: {model_path}")
+            pipeline = StableDiffusion3Pipeline.from_pretrained(
+                model_path,
+                transformer=transformer,
+                torch_dtype=torch.float16,
+                local_files_only=True  # Enforce using only local files
+            )
+        else:
+            # If local path doesn't exist, try using the repo
+            logger.info(f"Loading SD 3.5 model from HuggingFace: {model_repo}")
+
+            # Configure 4-bit quantization
+            nf4_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_compute_dtype=torch.float16
+            )
+
+            # Load transformer with quantization
+            transformer = SD3Transformer2DModel.from_pretrained(
+                model_repo,
+                subfolder="transformer",
+                quantization_config=nf4_config,
+                torch_dtype=torch.float16,
+                cache_dir=model_path
+            )
+
+            # Load full pipeline
+            pipeline = StableDiffusion3Pipeline.from_pretrained(
+                model_repo,
+                transformer=transformer,
+                torch_dtype=torch.float16,
+                cache_dir=model_path
+            )
 
         # Enable CPU offloading as primary memory optimization
         pipeline.enable_model_cpu_offload()
         logger.debug("Enabled CPU offloading for SD 3.5 model")
 
         return pipeline
+
+    def _fix_model_files(self, model_path: str, model_key: str) -> None:
+        """
+        Fix common issues with model files, like creating symlinks for differently named files
+        """
+        model_path = Path(model_path)
+        if not model_path.exists():
+            return
+
+        logger.debug(f"Checking model directory structure for {model_key}")
+
+        # Check for common VAE issues
+        vae_dir = model_path / "vae"
+        if vae_dir.exists():
+            # Check for fp16 version without standard version
+            fp16_file = vae_dir / "diffusion_pytorch_model.fp16.safetensors"
+            standard_file = vae_dir / "diffusion_pytorch_model.safetensors"
+
+            if fp16_file.exists() and not standard_file.exists():
+                logger.info(f"Creating symlink from {fp16_file.name} to {standard_file.name}")
+                try:
+                    os.symlink(fp16_file.name, standard_file)
+                    logger.info(f"Created symlink for VAE safetensors file")
+                except Exception as e:
+                    logger.error(f"Failed to create symlink: {str(e)}")
+
+            # Also check for bin version
+            bin_file = vae_dir / "diffusion_pytorch_model.bin"
+            if not bin_file.exists() and standard_file.exists():
+                logger.info(f"Creating symlink from {standard_file.name} to {bin_file.name}")
+                try:
+                    os.symlink(standard_file.name, bin_file)
+                    logger.info(f"Created symlink for VAE bin file")
+                except Exception as e:
+                    logger.error(f"Failed to create symlink: {str(e)}")
+
+        # Add more fixes here as needed
 
     def get_model(self, model_key: str) -> Optional[Union[FluxPipeline, DiffusionPipeline]]:
         """Get a model by its key, loading it if necessary"""
@@ -218,6 +289,9 @@ class ModelManager:
                 model_config = AVAILABLE_MODELS[model_key]
                 model_type = model_config.get("type", "").lower()
 
+                # Check and fix model file structure
+                self._fix_model_files(model_path, model_key)
+
                 # Common configuration for all models
                 load_config = {
                     "torch_dtype": torch.float16,  # Use float16 for better memory efficiency
@@ -250,18 +324,37 @@ class ModelManager:
                     pipe = apply_memory_optimizations(pipe)
                     logger.info(f"Loaded FLUX model ({model_key}) with CPU offloading")
                 elif model_key == "sd-xl" or model_type == "sdxl":
-                    pipe = DiffusionPipeline.from_pretrained(
-                        model_path,
-                        **load_config
-                    )
+                    # Verify model path exists and load from local path
+                    if os.path.exists(model_path):
+                        logger.debug(f"Loading SDXL model from local path: {model_path}")
+                        pipe = DiffusionPipeline.from_pretrained(
+                            model_path,
+                            **load_config
+                        )
+                    else:
+                        logger.debug(f"Loading SDXL model from repo: {model_config['repo']}")
+                        pipe = DiffusionPipeline.from_pretrained(
+                            model_config['repo'],
+                            cache_dir=model_path,
+                            **load_config
+                        )
                     pipe = apply_memory_optimizations(pipe)
                     logger.info(f"Loaded SDXL model with CPU offloading")
                 else:
                     # Default loading for other model types
-                    pipe = DiffusionPipeline.from_pretrained(
-                        model_path,
-                        **load_config
-                    )
+                    if os.path.exists(model_path):
+                        logger.debug(f"Loading generic model from local path: {model_path}")
+                        pipe = DiffusionPipeline.from_pretrained(
+                            model_path,
+                            **load_config
+                        )
+                    else:
+                        logger.debug(f"Loading generic model from repo: {model_config['repo']}")
+                        pipe = DiffusionPipeline.from_pretrained(
+                            model_config['repo'],
+                            cache_dir=model_path,
+                            **load_config
+                        )
                     pipe = apply_memory_optimizations(pipe)
                     logger.info(f"Loaded generic diffusion model with CPU offloading")
 

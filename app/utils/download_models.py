@@ -23,6 +23,42 @@ def print_status(message: str, status: str = "info") -> None:
     print(f"\n{icon} {message}")
     sys.stdout.flush()
 
+def print_model_structure(model_path: Path, max_depth: int = 3):
+    """Print the directory structure of a model for debugging"""
+    if not model_path.exists():
+        print_status(f"Model path {model_path} does not exist", "error")
+        return
+
+    print_status(f"Model structure for {model_path.name}:", "info")
+
+    def print_dir(path, prefix="", depth=0):
+        if depth > max_depth:
+            print(f"{prefix}... (max depth reached)")
+            return
+
+        if path.is_file():
+            size_mb = path.stat().st_size / (1024 * 1024)
+            print(f"{prefix}{path.name} ({size_mb:.2f} MB)")
+        else:
+            print(f"{prefix}{path.name}/")
+            items = list(path.iterdir())
+            items.sort(key=lambda x: (x.is_file(), x.name))
+
+            for i, item in enumerate(items):
+                is_last = (i == len(items) - 1)
+                if is_last:
+                    new_prefix = prefix + "└── "
+                    child_prefix = prefix + "    "
+                else:
+                    new_prefix = prefix + "├── "
+                    child_prefix = prefix + "│   "
+
+                print_dir(item, new_prefix, depth + 1)
+
+    # Start recursive printing
+    print_dir(model_path)
+    print()  # Add a blank line at the end
+
 def download_model(models_dir: Path, model_name: str, model_info: dict) -> bool:
     """Download a complete model folder using HuggingFace CLI"""
     try:
@@ -52,34 +88,50 @@ def download_model(models_dir: Path, model_name: str, model_info: dict) -> bool:
 
         # For HuggingFace models - download the entire folder
         if model_info["source"] == "huggingface":
-            # Simple approach: download everything at once
+            # Properly download the entire repository with all files
+            # Don't use any include/exclude patterns - we want everything
             cmd = [
                 "huggingface-cli", "download",
                 model_info["repo"],
                 "--local-dir", str(temp_path),
-                "--local-dir-use-symlinks", "False"
+                "--local-dir-use-symlinks", "False",
+                "--repo-type", "model"
             ]
 
-            print_status(f"Downloading complete model: {sanitized_name}...", "info")
-            result = subprocess.run(cmd, env=env, capture_output=True, text=True, check=False)
+            print_status(f"Downloading complete model repository: {sanitized_name}...", "info")
+            print_status(f"Running command: {' '.join(cmd)}", "info")
 
-            if result.returncode != 0:
-                print_status(f"Failed to download model: {result.stderr}", "error")
+            try:
+                result = subprocess.run(cmd, env=env, capture_output=True, text=True, check=True)
+
+                # Check if the download seems successful by checking directory content
+                if not list(temp_path.glob('**/*')):
+                    print_status(f"Download completed but no files found in {temp_path}", "error")
+                    print_status("Debug information:", "info")
+                    subprocess.run(["ls", "-la", str(temp_path)], check=False)
+                    return False
+
+                # Print directory structure for debugging
+                print_status("Downloaded model structure:", "info")
+                print_model_structure(temp_path)
+
+                # Move to final location
+                if model_path.exists():
+                    print_status(f"Model path {model_path} already exists, won't overwrite", "warning")
+                    # Clean up the temp folder since we won't use it
+                    shutil.rmtree(temp_path)
+                    return True
+
+                print_status(f"Moving from {temp_path} to {model_path}", "info")
+                temp_path.rename(model_path)
+                print_status(f"Successfully downloaded {sanitized_name}", "success")
+                return True
+
+            except subprocess.CalledProcessError as e:
+                print_status(f"Failed to download model: {e.stderr}", "error")
                 if temp_path.exists():
                     shutil.rmtree(temp_path)
                 return False
-
-            # Move to final location
-            if model_path.exists():
-                print_status(f"Model path {model_path} already exists, won't overwrite", "warning")
-                # Clean up the temp folder since we won't use it
-                shutil.rmtree(temp_path)
-                return True
-
-            print_status(f"Moving from {temp_path} to {model_path}", "info")
-            temp_path.rename(model_path)
-            print_status(f"Successfully downloaded {sanitized_name}", "success")
-            return True
 
         # Keep Civitai download logic as is
         elif model_info["source"] == "civitai":
