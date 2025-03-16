@@ -73,14 +73,13 @@ def generate_image():
                 400
             )
 
-        # Validate prompt length
-        if len(data["prompt"]) > 500:
-            raise APIError("Prompt too long. Maximum length is 500 characters.", 400)
+        # No prompt length validation - let the LLM handle truncation
+        # The frontend will display the character count but won't restrict submission
 
-        # Validate negative prompt if provided
+        # Validate negative prompt if provided (keeping this validation as negative prompts typically don't need to be as long)
         negative_prompt = data.get("negative_prompt", "")
-        if negative_prompt and len(negative_prompt) > 500:
-            raise APIError("Negative prompt too long. Maximum length is 500 characters.", 400)
+        if negative_prompt and len(negative_prompt) > 2000:  # Increased limit for negative prompt too
+            raise APIError("Negative prompt too long. Maximum length is 2000 characters.", 400)
 
         # Get optional settings
         settings = data.get("settings", {})
