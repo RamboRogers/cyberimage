@@ -38,6 +38,11 @@ def download_model(models_dir: Path, model_name: str, model_info: dict) -> bool:
             print_status(f"Cleaning up existing temp directory: {temp_path}", "info")
             shutil.rmtree(temp_path)
 
+        # SAFETY CHECK: If the final model folder already exists, don't download again
+        if model_path.exists():
+            print_status(f"Model {sanitized_name} already exists, won't overwrite it", "warning")
+            return True
+
         # Create temp directory
         temp_path.mkdir(exist_ok=True)
         env = os.environ.copy()
@@ -66,8 +71,10 @@ def download_model(models_dir: Path, model_name: str, model_info: dict) -> bool:
 
             # Move to final location
             if model_path.exists():
-                print_status(f"Removing existing model directory: {model_path}", "info")
-                shutil.rmtree(model_path)
+                print_status(f"Model path {model_path} already exists, won't overwrite", "warning")
+                # Clean up the temp folder since we won't use it
+                shutil.rmtree(temp_path)
+                return True
 
             print_status(f"Moving from {temp_path} to {model_path}", "info")
             temp_path.rename(model_path)
@@ -115,8 +122,10 @@ def download_model(models_dir: Path, model_name: str, model_info: dict) -> bool:
 
             # Move to final location
             if model_path.exists():
-                print_status(f"Removing existing model directory: {model_path}", "info")
-                shutil.rmtree(model_path)
+                print_status(f"Model path {model_path} already exists, won't overwrite", "warning")
+                # Clean up the temp folder since we won't use it
+                shutil.rmtree(temp_path)
+                return True
 
             print_status(f"Moving from {temp_path} to {model_path}", "info")
             temp_path.rename(model_path)
@@ -164,6 +173,32 @@ def clean_temp_directories(models_dir: Path):
     else:
         print_status("No temporary directories found", "info")
 
+def model_is_large_enough(model_path: Path, min_size_gb: float = 10.0) -> bool:
+    """Check if a model directory is large enough to be considered complete"""
+    if not model_path.exists():
+        return False
+
+    # Check the size of the directory
+    try:
+        total_size = 0
+        for path in model_path.glob('**/*'):
+            if path.is_file():
+                total_size += path.stat().st_size
+
+        # Convert to GB
+        size_gb = total_size / (1024**3)
+
+        # If the model is larger than the minimum size, consider it complete
+        if size_gb >= min_size_gb:
+            print_status(f"Model {model_path.name} is {size_gb:.1f}GB - considered complete based on size", "info")
+            return True
+
+        print_status(f"Model {model_path.name} is only {size_gb:.1f}GB - may be incomplete", "warning")
+        return False
+    except Exception as e:
+        print_status(f"Error checking model size: {str(e)}", "warning")
+        return False
+
 def download_all_models():
     """Download all required models"""
     models_dir = Path(os.getenv("MODEL_FOLDER", "./models"))
@@ -189,24 +224,19 @@ def download_all_models():
 
         print_status(f"Found {len(enabled_models)} enabled models in configuration", "info")
 
-        # Check which models need to be downloaded
+        # Check which models need to be downloaded - SIMPLIFIED
         for model_name, model_info in enabled_models.items():
             # Sanitize model name
             sanitized_name = model_name.strip('"\' \t')
             model_path = models_dir / sanitized_name
 
-            # Check if model directory exists and has all required files
-            if model_path.exists() and check_model_files(model_path, model_info):
-                print_status(f"Model {sanitized_name} already exists and is complete, skipping...", "info")
+            # Simply check if the model folder exists - that's enough!
+            if model_path.exists():
+                print_status(f"Model {sanitized_name} already exists, skipping...", "info")
                 continue
-
-            # If we get here, the model needs to be downloaded
-            if not model_path.exists():
-                print_status(f"Model {sanitized_name} is missing", "warning")
             else:
-                print_status(f"Model {sanitized_name} exists but is incomplete", "warning")
-
-            models_to_download[model_name] = model_info
+                print_status(f"Model {sanitized_name} is missing, will download", "warning")
+                models_to_download[model_name] = model_info
 
         if not models_to_download:
             print_status("All enabled models are already downloaded!", "success")

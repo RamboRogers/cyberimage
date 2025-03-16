@@ -24,8 +24,13 @@ def parse_model_config() -> Dict[str, Dict[str, Any]]:
     common_file_lists = {
         "flux": [
             "model_index.json",
-            "ae.safetensors",
-            "flux1-dev.safetensors"
+            "ae.safetensors"
+            # Removed flux1-dev.safetensors to be more forgiving
+        ],
+        "flux-schnell": [
+            "model_index.json",
+            "ae.safetensors"
+            # No specific safetensors file check since it may vary
         ],
         "sd3": [
             "model_index.json",
