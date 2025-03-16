@@ -28,42 +28,6 @@ class ModelGenerationError(Exception):
     """Raised when image generation fails"""
     pass
 
-class CleanupThread(threading.Thread):
-    """Background thread to periodically cleanup memory"""
-
-    def __init__(self, manager, interval=300):
-        """Initialize the cleanup thread
-
-        Args:
-            manager: The ModelManager instance
-            interval: Cleanup interval in seconds (default: 300 = 5 minutes)
-        """
-        super().__init__(daemon=True)
-        self.manager = manager
-        self.interval = interval
-        self.stop_event = threading.Event()
-
-    def run(self):
-        """Run the cleanup thread"""
-        logger.info(f"Starting periodic memory cleanup thread (interval: {self.interval}s)")
-        while not self.stop_event.is_set():
-            # Sleep for the specified interval
-            for _ in range(self.interval):
-                if self.stop_event.is_set():
-                    break
-                time.sleep(1)
-
-            if not self.stop_event.is_set():
-                logger.info("Performing scheduled memory cleanup")
-                try:
-                    self.manager._force_memory_cleanup()
-                except Exception as e:
-                    logger.error(f"Error in scheduled cleanup: {str(e)}")
-
-    def stop(self):
-        """Stop the cleanup thread"""
-        self.stop_event.set()
-
 def get_optimal_device():
     """Determine the best available compute device, requiring GPU acceleration"""
     if platform.system() == "Darwin":  # macOS
@@ -120,41 +84,12 @@ class ModelManager:
 
         # Add last health check timestamp
         self._last_health_check = time.time()
-        self._health_check_interval = 20  # Check every 20 seconds (reduced from 60)
-
-        # Start periodic cleanup thread
-        self._cleanup_thread = CleanupThread(self, interval=300)  # Cleanup every 5 minutes
-        self._cleanup_thread.start()
-        logger.info("Started periodic memory cleanup thread")
-
-    def check_system_memory(self):
-        """Check system (CPU) memory usage and return a warning if it's too high"""
-        try:
-            import psutil
-            memory = psutil.virtual_memory()
-            memory_percent = memory.percent
-
-            if memory_percent > 85:
-                logger.warning(f"System memory usage is high: {memory_percent:.1f}%")
-                return False
-            elif memory_percent > 75:
-                logger.info(f"System memory usage is elevated: {memory_percent:.1f}%")
-
-            return True
-        except ImportError:
-            logger.warning("psutil not available - cannot check system memory")
-            return True
-        except Exception as e:
-            logger.error(f"Error checking system memory: {str(e)}")
-            return True
+        self._health_check_interval = 60  # Check every 60 seconds
 
     def check_gpu_health(self):
         """Check GPU memory usage and force cleanup if necessary"""
-        # First check system memory
-        system_healthy = self.check_system_memory()
-
         if self._device != "cuda":
-            return system_healthy  # Only GPU checks applicable for CUDA devices
+            return True  # Only applicable for CUDA devices
 
         try:
             current_time = time.time()
@@ -171,11 +106,11 @@ class ModelManager:
             free_memory = total_memory - memory_allocated
 
             # Only log if usage is high
-            if memory_allocated / total_memory > 0.7:
+            if memory_allocated / total_memory > 0.8:
                 logger.info(f"GPU Health Check: {memory_allocated:.2f}GB/{total_memory:.2f}GB ({memory_allocated/total_memory:.2%})")
 
-            # Check if we're approaching a dangerous threshold (e.g., 80% usage instead of 90%)
-            memory_threshold = total_memory * 0.8
+            # Check if we're approaching a dangerous threshold (e.g., 90% usage)
+            memory_threshold = total_memory * 0.9
             if memory_allocated > memory_threshold:
                 logger.warning(f"GPU memory usage exceeds threshold ({memory_allocated:.2f}GB > {memory_threshold:.2f}GB)")
                 self._force_memory_cleanup()
@@ -188,7 +123,7 @@ class ModelManager:
 
     def _force_memory_cleanup(self):
         """Force aggressive memory cleanup"""
-        logger.info("🧹 Performing aggressive memory cleanup")
+        logger.info("Forcing complete GPU memory cleanup")
 
         try:
             # Unload all models
@@ -196,34 +131,17 @@ class ModelManager:
 
             # Force CUDA cache flush
             if self._device == "cuda":
-                # Multiple passes of cleanup
-                for _ in range(3):
-                    torch.cuda.empty_cache()
-                    gc.collect()
-                    torch.cuda.synchronize()  # Wait for all CUDA operations to complete
+                torch.cuda.empty_cache()
+                gc.collect()
+                torch.cuda.synchronize()  # Wait for all CUDA operations to complete
+
+                # Second pass cleanup
+                torch.cuda.empty_cache()
+                gc.collect()
 
                 # Print memory state after cleanup
                 memory_allocated = torch.cuda.memory_allocated() / (1024**3)
-                logger.info(f"🧹 Memory after cleanup: {memory_allocated:.2f}GB")
-
-            # Try to force Python to release more memory
-            import sys
-            try:
-                sys.set_asyncgen_hooks(firstiter=lambda gen: None, finalizer=lambda gen: None)
-            except Exception:
-                pass
-
-            # Force garbage collection multiple times
-            for _ in range(3):
-                gc.collect()
-
-            # Try to clean up any lingering references
-            for obj in gc.get_objects():
-                try:
-                    if torch.is_tensor(obj):
-                        obj.detach().cpu()
-                except Exception:
-                    pass
+                logger.info(f"GPU memory after cleanup: {memory_allocated:.2f}GB")
         except Exception as e:
             logger.error(f"Error during forced cleanup: {str(e)}")
 
