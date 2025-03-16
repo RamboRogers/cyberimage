@@ -28,16 +28,12 @@
 | 🤖 State-of-the-art AI models | 🌃 Cyberpunk-themed UI | 📊 Multiple view options | 💾 Smart model caching |
 | 🎛️ Customizable parameters | ⏱️ Real-time status updates | 🔍 Detailed image modal | 🧠 Memory optimization |
 | 🚫 Negative prompt support | 🖱️ Interactive gallery | ⬇️ Quick download actions | 🔄 Efficient queue system |
-| 📦 Batch image generation | 📱 Mobile-responsive design | 🗑️ Easy deletion options | 🏃‍♂️ Background processing |
-| 📈 Real-time progress | ⌨️ Keyboard shortcuts | 📋 Copy prompt feature | 📊 Progress tracking |
-| 🧠 Smart queue management | 📝 Metadata viewing | 🔄 Infinite scroll loading | 🔒 **Security & Privacy** |
-| 🎯 Precise control | 🌈 Beautiful UI | 🔍 Search and filtering | 🛡️ No data collection |
-| 🚀 Fast generation | 🎮 Intuitive controls | 📑 Batch operations | 🏠 Local image storage |
-| 🧩 Model compatibility | 🔔 Notifications | 🏷️ Tagging system | 🔐 Secure file handling |
-| 🔄 Seamless workflow | 🌙 Dark mode support | 📅 Date organization | 🕵️ Privacy-focused design |
-| 🤖 **MCP Integration** | 🔌 **AI Accessibility** |  |  |
-| 🔗 AI assistant support | 🔄 JSON-RPC interface |  |  |
-| 🧩 Standardized protocol | 🧰 Example clients |  |  |
+| 📦 Batch image generation | 📱 Mobile-responsive design | 📋 Copy prompt feature | 🏃‍♂️ Background processing |
+| 📈 Real-time progress | 🌈 Beautiful UI | 🔍 Search and filtering | 🔒 No data collection |
+| 🎯 Precise control | 🎮 Intuitive controls | 🏷️ Tagging system | 🏠 Local image storage |
+| 🧩 Model compatibility | 🌙 Dark mode support | | |
+| 🤖 **MCP Integration** | 🔌 **AI Accessibility** | | |
+| 🔗 AI assistant support | 🔄 JSON-RPC interface | | |
 
 </div>
 
@@ -262,6 +258,20 @@ OPENAI_MODEL=
 
 # Civitai API Key (optional, for downloading models) (not configured currently)
 CIVITAI_API_KEY=
+
+# Format: MODEL_NAME=<name>;<repo>;<description>;<source>;<requires_auth>
+# Note: When sourcing this file in a shell, quotes are required around values with semicolons
+# When used as .env file directly, quotes are optional but must be consistent
+MODEL_1="flux-1;black-forest-labs/FLUX.1-dev;FLUX Dev;huggingface;true"
+MODEL_2="sd-3.5;stabilityai/stable-diffusion-3.5-large;Stable Diffusion 3.5;huggingface;true"
+MODEL_3="flux-schnell;black-forest-labs/FLUX.1-schnell;FLUX Schnell;huggingface;true"
+# MODEL_4="my-custom-model;civitai:12345;My Custom Model;civitai;true"
+
+# Enable/disable downloading specific models (values: true/false)
+DOWNLOAD_MODEL_1=true
+DOWNLOAD_MODEL_2=true
+DOWNLOAD_MODEL_3=tue
+# DOWNLOAD_MODEL_4=false
 ```
 
 ## 🖼️ Managing Models
@@ -328,17 +338,19 @@ CyberImage automatically detects the model type based on the model name:
 Here's a complete example with multiple models:
 
 ```
-# Default models
-MODEL_1=flux-1;black-forest-labs/FLUX.1-dev;FLUX base model;huggingface;true
-MODEL_2=sd-3.5;stabilityai/stable-diffusion-3.5-large;Stable Diffusion 3.5;huggingface;true
-MODEL_3=flux-abliterated;aoxo/flux.1dev-abliteratedv2;FLUX Abliterated variant;huggingface;true
+# Format: MODEL_NAME=<name>;<repo>;<description>;<source>;<requires_auth>
+# Note: When sourcing this file in a shell, quotes are required around values with semicolons
+# When used as .env file directly, quotes are optional but must be consistent
+MODEL_1="flux-1;black-forest-labs/FLUX.1-dev;FLUX Dev;huggingface;true"
+MODEL_2="sd-3.5;stabilityai/stable-diffusion-3.5-large;Stable Diffusion 3.5;huggingface;true"
+MODEL_3="flux-schnell;black-forest-labs/FLUX.1-schnell;FLUX Schnell;huggingface;true"
+# MODEL_4="my-custom-model;civitai:12345;My Custom Model;civitai;true"
 
-# SDXL models
-MODEL_4=juggernaut-xl;ckpt/juggernaut-xl;Juggernaut XL;huggingface;true
-MODEL_5=animagine-xl;cagliostrolab/animagine-xl-4.0;Animagine XL;huggingface;true
-
-# Disable download for large models you don't need right now
-DOWNLOAD_MODEL_4=false
+# Enable/disable downloading specific models (values: true/false)
+DOWNLOAD_MODEL_1=true
+DOWNLOAD_MODEL_2=true
+DOWNLOAD_MODEL_3=tue
+# DOWNLOAD_MODEL_4=false
 ```
 
 After changing model configurations, restart the application to apply the changes.
