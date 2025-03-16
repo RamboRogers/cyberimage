@@ -45,6 +45,10 @@ def parse_model_config() -> Dict[str, Dict[str, Any]]:
 
     # Find all model definitions in environment variables
     for key, value in os.environ.items():
+        # Skip MODEL_FOLDER which is a path setting, not a model definition
+        if key == 'MODEL_FOLDER':
+            continue
+
         if key.startswith('MODEL_') and value and '_' not in key[6:]:
             try:
                 model_num = key[6:]  # Extract number from MODEL_N

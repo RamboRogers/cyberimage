@@ -241,13 +241,14 @@ class ModelManager:
                 if model_key == "sd-3.5" or model_type == "sd3":
                     # SD 3.5 has special handling with transformer
                     pipe = self.load_sd_pipeline(model_key)
-                elif model_key == "flux-1" or model_type == "flux":
+                elif "flux" in model_key.lower() or model_type == "flux":
+                    # Apply Flux profile to any model key containing "flux"
                     pipe = FluxPipeline.from_pretrained(
                         model_path,
                         **load_config
                     )
                     pipe = apply_memory_optimizations(pipe)
-                    logger.info(f"Loaded FLUX model with CPU offloading")
+                    logger.info(f"Loaded FLUX model ({model_key}) with CPU offloading")
                 elif model_key == "sd-xl" or model_type == "sdxl":
                     pipe = DiffusionPipeline.from_pretrained(
                         model_path,
