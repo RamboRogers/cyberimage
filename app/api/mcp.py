@@ -1,12 +1,17 @@
 """
 Model Context Protocol (MCP) implementation for CyberImage API
+
+This module implements the MCP specification for AI image generation.
+The default model used for generation matches the system's DEFAULT_MODEL,
+which is dynamically determined based on available models
+(prioritizing flux-1 if available, otherwise using the first available model).
 """
 import json
 import logging
 import uuid
 import time
 from flask import jsonify, request, current_app, Blueprint, g
-from app.models import AVAILABLE_MODELS
+from app.models import AVAILABLE_MODELS, DEFAULT_MODEL
 from app.utils.queue import QueueManager
 from app.api.routes import APIError
 
@@ -14,8 +19,6 @@ mcp_bp = Blueprint('mcp', __name__)
 
 # Configure logger
 logger = logging.getLogger(__name__)
-
-DEFAULT_MODEL = "flux-1"
 
 @mcp_bp.route("/mcp", methods=["POST"])
 def handle_mcp():
@@ -95,7 +98,7 @@ def handle_generate(params):
     {
         "prompt": "A detailed description of the image",
         "negative_prompt": "What to avoid in the image (optional)",
-        "model": "model-id (optional, defaults to flux-2)",
+        "model": "model-id (optional, defaults to system's DEFAULT_MODEL)",
         "settings": {
             "height": 1024 (optional),
             "width": 1024 (optional),
@@ -113,6 +116,12 @@ def handle_generate(params):
     prompt = params["prompt"]
     negative_prompt = params.get("negative_prompt", "")
     model_id = params.get("model", DEFAULT_MODEL)
+
+    # Log which model is being used
+    if "model" not in params:
+        logger.info(f"MCP: Using default model: {model_id}")
+    else:
+        logger.info(f"MCP: Using specified model: {model_id}")
 
     # Validate model
     if model_id not in AVAILABLE_MODELS:
@@ -194,8 +203,16 @@ def handle_status(params):
 def handle_models(params):
     """
     Handle models listing requests
+
+    Returns a dictionary containing:
+    - All available models with their IDs and descriptions
+    - The system's default model, which is determined dynamically
+      based on the application configuration (prioritizing flux-1
+      if available, otherwise the first available model)
+
+    This ensures consistency between the MCP API and the web interface.
     """
-    # Return available models with flux-2 marked as default
+    # Return available models with the system default model
     return {
         "models": {name: {"id": info["id"], "description": info["description"]}
                  for name, info in AVAILABLE_MODELS.items()},

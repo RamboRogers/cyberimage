@@ -8,7 +8,9 @@ The [Model Context Protocol (MCP)](https://spec.modelcontextprotocol.io/specific
 
 ## CyberImage MCP Integration
 
-CyberImage implements MCP to enable AI assistants to generate images directly using our image generation capabilities. This provides a standardized way for AI systems to:
+CyberImage implements MCP to enable AI assistants to generate images directly using our image generation capabilities. The MCP integration uses the same default model as the web interface, ensuring consistency across all application interfaces. This default model is determined dynamically, prioritizing "flux-1" if available, or otherwise using the first available model in the configuration.
+
+This provides a standardized way for AI systems to:
 
 1. Discover available image generation models
 2. Generate images based on text prompts
@@ -65,11 +67,13 @@ Lists all available image generation models.
                 "description": "Modified FLUX model with enhanced capabilities"
             }
         },
-        "default": "flux-2"
+        "default": "flux-1"
     },
     "id": "request-123"
 }
 ```
+
+The `default` field in the response indicates the system's current default model, which is dynamically determined based on available models (prioritizing "flux-1" if available, otherwise using the first available model).
 
 ### 2. context.image_generation.generate
 
@@ -83,7 +87,7 @@ Submits an image generation request.
     "params": {
         "prompt": "A detailed description of the image you want to generate",
         "negative_prompt": "What to exclude from the image (optional)",
-        "model": "flux-2",
+        "model": "flux-1",
         "settings": {
             "num_images": 1,
             "num_inference_steps": 30,
@@ -95,6 +99,8 @@ Submits an image generation request.
     "id": "request-123"
 }
 ```
+
+If the `model` parameter is omitted, the system will use the default model as returned by the `context.image_generation.models` method.
 
 **Response:**
 ```json
@@ -230,6 +236,13 @@ def mcp_request(method, params=None):
         print(f"Error: {response.status_code}")
         return None
 
+def get_default_model():
+    """Get the default model from the system"""
+    response = mcp_request("context.image_generation.models")
+    if response and "result" in response:
+        return response["result"]["default"]
+    return None
+
 def generate_image(prompt, model=None, negative_prompt=None):
     """Generate an image using the MCP endpoint"""
     # Prepare parameters
@@ -275,7 +288,16 @@ def generate_image(prompt, model=None, negative_prompt=None):
 
 # Example usage
 if __name__ == "__main__":
+    # First example: Using the system's default model
+    default_model = get_default_model()
+    print(f"Using system default model: {default_model}")
+
     image_url = generate_image("A beautiful sunset over mountains")
+    if image_url:
+        print(f"Success! Image available at: {image_url}")
+
+    # Second example: Explicitly specifying a model
+    image_url = generate_image("A futuristic cityscape", model="sd-3.5")
     if image_url:
         print(f"Success! Image available at: {image_url}")
 ```
@@ -288,9 +310,10 @@ For a complete AI assistant integration example, see the `examples/ai_assistant_
 
 1. **Handle Rate Limiting**: Implement exponential backoff when making repeated requests.
 2. **Provide Detailed Prompts**: The quality of the generated image depends on the prompt detail.
-3. **Error Handling**: Be prepared to handle error responses from the API.
-4. **Timeouts**: Set appropriate timeouts for both the initial request and status polling.
-5. **User Consent**: When using in AI assistants, ensure users are aware of and consent to image generation.
+3. **Use Model Discovery**: Call the `context.image_generation.models` method to discover available models and the current default model.
+4. **Error Handling**: Be prepared to handle error responses from the API.
+5. **Timeouts**: Set appropriate timeouts for both the initial request and status polling.
+6. **User Consent**: When using in AI assistants, ensure users are aware of and consent to image generation.
 
 ## Troubleshooting
 

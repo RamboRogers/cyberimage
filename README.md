@@ -48,7 +48,7 @@ MCP is an open protocol that enables AI systems to interact with external tools 
 ### Key MCP Features
 
 - **JSON-RPC 2.0 Interface**: Simple, standardized format for all requests
-- **Default Model**: Uses `flux-2` as the default model for optimal results
+- **Dynamic Default Model**: Uses the system's default model (same as the web UI), prioritizing "flux-1" if available
 - **Seamless Queue Integration**: Jobs from AI assistants are integrated into the same queue as web UI requests
 - **Progress Tracking**: AI systems can track generation progress in real-time
 - **Standard Format**: Follows the MCP specification for interoperability with any MCP-compatible AI system
