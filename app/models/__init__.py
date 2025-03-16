@@ -1,25 +1,10 @@
 """
-Model Definitions for CyberImage
+Models initialization for CyberImage
 """
-from typing import Dict, Any
+from app.utils.config import get_available_models
 
-AVAILABLE_MODELS = {
-    "flux-1": {
-        "id": "black-forest-labs/FLUX.1-dev",
-        "description": "High-quality image generation model optimized for detailed outputs",
-        "type": "flux"
-    },
-    "sd-3.5": {
-        "id": "stabilityai/stable-diffusion-3.5-large",
-        "description": "Latest Stable Diffusion model with improved quality and speed",
-        "type": "sd"
-    },
-    "flux-abliterated": {
-        "id": "aoxo/flux.1dev-abliteratedv2",
-        "description": "Modified FLUX model with enhanced capabilities",
-        "type": "flux"
-    }
-}
+# Get available models from configuration
+AVAILABLE_MODELS = get_available_models()
 
-# Set the default model
-DEFAULT_MODEL = "flux-1"
+# Make models accessible from this module
+__all__ = ["AVAILABLE_MODELS"]

@@ -153,19 +153,10 @@ async function initializeModels() {
                     this.style.height = 'auto';
                     this.style.height = (this.scrollHeight) + 'px';
 
-                    // Add visual feedback for longer prompts (better prompts)
-                    const minLength = 20;
-                    const idealLength = 150;
-
-                    if (this.value.length > idealLength) {
+                    // Simplified feedback - just show positive feedback when there's content
+                    if (this.value.length > 0) {
                         this.classList.add('prompt-ideal');
-                        this.classList.remove('prompt-short');
-                    } else if (this.value.length > minLength) {
-                        this.classList.add('prompt-good');
-                        this.classList.remove('prompt-ideal', 'prompt-short');
-                    } else if (this.value.length > 0) {
-                        this.classList.add('prompt-short');
-                        this.classList.remove('prompt-ideal', 'prompt-good');
+                        this.classList.remove('prompt-short', 'prompt-good');
                     } else {
                         this.classList.remove('prompt-ideal', 'prompt-good', 'prompt-short');
                     }
@@ -174,7 +165,7 @@ async function initializeModels() {
                 // Add length indicator
                 const lengthIndicator = document.createElement('div');
                 lengthIndicator.className = 'prompt-length-indicator';
-                lengthIndicator.innerHTML = '<span class="current">0</span> chars';
+                lengthIndicator.innerHTML = '<span class="current">0</span> chars (no limit)';
                 promptInput.parentNode.appendChild(lengthIndicator);
 
                 promptInput.addEventListener('input', function() {
@@ -183,11 +174,9 @@ async function initializeModels() {
                     if (currentSpan) {
                         currentSpan.textContent = currentLength;
 
-                        // Update color based on length
-                        if (currentLength > 150) {
+                        // Always show positive feedback regardless of length
+                        if (currentLength > 0) {
                             currentSpan.className = 'current ideal';
-                        } else if (currentLength > 50) {
-                            currentSpan.className = 'current good';
                         } else {
                             currentSpan.className = 'current';
                         }
@@ -506,9 +495,15 @@ function initializeGenerationForm() {
 
         try {
             const formData = new FormData(form);
+            const promptInput = document.getElementById('prompt-input');
+            const prompt = formData.get('prompt');
+
+            // No validation on prompt length - accept any length
+            // The backend/LLM will handle truncation if needed
+
             const requestData = {
                 model_id: formData.get('model'),
-                prompt: formData.get('prompt'),
+                prompt: prompt, // Use prompt without any length validation
                 negative_prompt: formData.get('negative_prompt') || undefined,
                 settings: {
                     num_images: parseInt(formData.get('num_images')),

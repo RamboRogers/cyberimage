@@ -8,28 +8,7 @@ from pathlib import Path
 import shutil
 import fcntl
 from flask import current_app
-
-# Model configurations based on actual repo structure
-MODELS = {
-    "flux-1": {
-        "repo": "black-forest-labs/FLUX.1-dev",
-        "description": "FLUX base model",
-        "requires_auth": True,
-        "source": "huggingface"
-    },
-    "sd-3.5": {
-        "repo": "stabilityai/stable-diffusion-3.5-large",
-        "description": "Stable Diffusion 3.5",
-        "requires_auth": True,
-        "source": "huggingface"
-    },
-    "flux-abliterated": {
-        "repo": "aoxo/flux.1dev-abliteratedv2",
-        "description": "FLUX Abliterated variant",
-        "requires_auth": True,
-        "source": "huggingface"
-    }
-}
+from app.utils.config import get_downloadable_models
 
 def print_status(message: str, status: str = "info") -> None:
     """Print formatted status messages"""
@@ -47,13 +26,16 @@ def print_status(message: str, status: str = "info") -> None:
 def download_model(models_dir: Path, model_name: str, model_info: dict) -> bool:
     """Download a complete model folder using HuggingFace CLI"""
     try:
-        print_status(f"Downloading {model_name}: {model_info['description']}", "pending")
+        # Ensure model_name doesn't have quotes or other characters that might cause issues
+        sanitized_name = model_name.strip('"\' \t')
+        model_path = models_dir / sanitized_name
+        temp_path = models_dir / f"{sanitized_name}_temp"
 
-        model_path = models_dir / model_name
-        temp_path = models_dir / f"{model_name}_temp"
+        print_status(f"Downloading {sanitized_name}: {model_info['description']}", "pending")
 
         # Clean up any leftover temp directory
         if temp_path.exists():
+            print_status(f"Cleaning up existing temp directory: {temp_path}", "info")
             shutil.rmtree(temp_path)
 
         # Create temp directory
@@ -73,7 +55,7 @@ def download_model(models_dir: Path, model_name: str, model_info: dict) -> bool:
                 "--local-dir-use-symlinks", "False"
             ]
 
-            print_status(f"Downloading complete model: {model_name}...", "info")
+            print_status(f"Downloading complete model: {sanitized_name}...", "info")
             result = subprocess.run(cmd, env=env, capture_output=True, text=True, check=False)
 
             if result.returncode != 0:
@@ -84,9 +66,12 @@ def download_model(models_dir: Path, model_name: str, model_info: dict) -> bool:
 
             # Move to final location
             if model_path.exists():
+                print_status(f"Removing existing model directory: {model_path}", "info")
                 shutil.rmtree(model_path)
+
+            print_status(f"Moving from {temp_path} to {model_path}", "info")
             temp_path.rename(model_path)
-            print_status(f"Successfully downloaded {model_name}", "success")
+            print_status(f"Successfully downloaded {sanitized_name}", "success")
             return True
 
         # Keep Civitai download logic as is
@@ -130,13 +115,16 @@ def download_model(models_dir: Path, model_name: str, model_info: dict) -> bool:
 
             # Move to final location
             if model_path.exists():
+                print_status(f"Removing existing model directory: {model_path}", "info")
                 shutil.rmtree(model_path)
+
+            print_status(f"Moving from {temp_path} to {model_path}", "info")
             temp_path.rename(model_path)
-            print_status(f"Successfully downloaded {model_name}", "success")
+            print_status(f"Successfully downloaded {sanitized_name}", "success")
             return True
 
     except Exception as e:
-        print_status(f"Failed to download {model_name}: {str(e)}", "error")
+        print_status(f"Failed to download {sanitized_name}: {str(e)}", "error")
         if temp_path.exists():
             shutil.rmtree(temp_path)
         return False
@@ -156,6 +144,26 @@ def release_lock(lock_file):
         fcntl.flock(lock_file, fcntl.LOCK_UN)
         lock_file.close()
 
+def clean_temp_directories(models_dir: Path):
+    """Find and remove any temporary download directories"""
+    print_status("Cleaning up any leftover temporary directories", "info")
+    count = 0
+
+    # Look for directories ending with _temp or containing quotes
+    for path in models_dir.iterdir():
+        if path.is_dir() and (path.name.endswith('_temp') or '"' in path.name or "'" in path.name):
+            try:
+                print_status(f"Removing temporary directory: {path.name}", "info")
+                shutil.rmtree(path)
+                count += 1
+            except Exception as e:
+                print_status(f"Failed to remove {path.name}: {str(e)}", "warning")
+
+    if count > 0:
+        print_status(f"Removed {count} temporary directories", "success")
+    else:
+        print_status("No temporary directories found", "info")
+
 def download_all_models():
     """Download all required models"""
     models_dir = Path(os.getenv("MODEL_FOLDER", "./models"))
@@ -170,24 +178,38 @@ def download_all_models():
         return
 
     try:
+        # First clean up any leftover temp directories or directories with quotes
+        clean_temp_directories(models_dir)
+
         print_status("Checking existing models...", "info")
 
-        # Check which models need to be downloaded
+        # Get models that are enabled for download from config
         models_to_download = {}
-        for model_name, model_info in MODELS.items():
-            model_path = models_dir / model_name
+        enabled_models = get_downloadable_models()
 
-            # Simply check if the model directory exists
-            if model_path.exists():
-                print_status(f"Model {model_name} already exists, skipping...", "info")
+        print_status(f"Found {len(enabled_models)} enabled models in configuration", "info")
+
+        # Check which models need to be downloaded
+        for model_name, model_info in enabled_models.items():
+            # Sanitize model name
+            sanitized_name = model_name.strip('"\' \t')
+            model_path = models_dir / sanitized_name
+
+            # Check if model directory exists and has all required files
+            if model_path.exists() and check_model_files(model_path, model_info):
+                print_status(f"Model {sanitized_name} already exists and is complete, skipping...", "info")
                 continue
 
             # If we get here, the model needs to be downloaded
-            print_status(f"Model {model_name} is missing", "warning")
+            if not model_path.exists():
+                print_status(f"Model {sanitized_name} is missing", "warning")
+            else:
+                print_status(f"Model {sanitized_name} exists but is incomplete", "warning")
+
             models_to_download[model_name] = model_info
 
         if not models_to_download:
-            print_status("All models are already downloaded!", "success")
+            print_status("All enabled models are already downloaded!", "success")
             return
 
         print_status(f"Need to download {len(models_to_download)} models...", "info")
@@ -214,3 +236,21 @@ def download_all_models():
         release_lock(lock_file)
         if lock_path.exists():
             lock_path.unlink()
+
+def check_model_files(model_path: Path, model_info: dict) -> bool:
+    """Check if all required files exist for a model"""
+    if not model_path.exists():
+        return False
+
+    # If no files are specified, just check if the directory exists
+    if "files" not in model_info or not model_info["files"]:
+        return True
+
+    # Check each required file
+    for file in model_info["files"]:
+        file_path = model_path / file
+        if not file_path.exists():
+            print_status(f"Missing required file in {model_path.name}: {file}", "warning")
+            return False
+
+    return True

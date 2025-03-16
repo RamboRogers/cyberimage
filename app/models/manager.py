@@ -215,20 +215,18 @@ class ModelManager:
 
             try:
                 model_path = os.path.join(current_app.config["MODELS_PATH"], model_key)
+                model_config = AVAILABLE_MODELS[model_key]
+                model_type = model_config.get("type", "").lower()
 
                 # Common configuration for all models
-                model_config = {
+                load_config = {
                     "torch_dtype": torch.float16,  # Use float16 for better memory efficiency
                     "local_files_only": True,
                 }
 
-                # For CUDA devices, we'll rely on CPU offloading rather than device_map
-                logger.debug("Using CPU offloading strategy for memory management")
-
                 # Common memory optimizations for all models
                 def apply_memory_optimizations(pipe):
                     # Use CPU offloading as the primary memory optimization strategy
-                    # This will automatically handle moving only necessary components to GPU during inference
                     pipe.enable_model_cpu_offload()
                     logger.debug("Enabled CPU offloading to minimize GPU memory usage")
 
@@ -239,25 +237,32 @@ class ModelManager:
 
                     return pipe
 
-                if model_key == "flux-1":
-                    pipe = FluxPipeline.from_pretrained(
-                        model_path,
-                        **model_config
-                    )
-                    pipe = apply_memory_optimizations(pipe)
-                    logger.info(f"Loaded FLUX-1 model with CPU offloading")
-
-                elif model_key == "sd-3.5":
+                # Dynamic model loading based on model_key or model_type
+                if model_key == "sd-3.5" or model_type == "sd3":
                     # SD 3.5 has special handling with transformer
                     pipe = self.load_sd_pipeline(model_key)
-
-                elif model_key == "flux-abliterated":
+                elif model_key == "flux-1" or model_type == "flux":
                     pipe = FluxPipeline.from_pretrained(
                         model_path,
-                        **model_config
+                        **load_config
                     )
                     pipe = apply_memory_optimizations(pipe)
-                    logger.info(f"Loaded FLUX-Abliterated model with CPU offloading")
+                    logger.info(f"Loaded FLUX model with CPU offloading")
+                elif model_key == "sd-xl" or model_type == "sdxl":
+                    pipe = DiffusionPipeline.from_pretrained(
+                        model_path,
+                        **load_config
+                    )
+                    pipe = apply_memory_optimizations(pipe)
+                    logger.info(f"Loaded SDXL model with CPU offloading")
+                else:
+                    # Default loading for other model types
+                    pipe = DiffusionPipeline.from_pretrained(
+                        model_path,
+                        **load_config
+                    )
+                    pipe = apply_memory_optimizations(pipe)
+                    logger.info(f"Loaded generic diffusion model with CPU offloading")
 
                 if pipe is None:
                     raise ValueError(f"Failed to load model {model_key}")
@@ -265,10 +270,6 @@ class ModelManager:
                 # Verify the model is on the correct device
                 if hasattr(pipe, 'device'):
                     logger.debug(f"Model device: {pipe.device}")
-                    # We're using CPU offloading, so we don't want to manually move to GPU
-                    # if str(pipe.device) != self._device and self._device != "mps":
-                    #     print(f"   • Moving model from {pipe.device} to {self._device}")
-                    #     pipe = pipe.to(self._device)
 
                 # Update memory tracking after loading
                 if self._device == "cuda":
