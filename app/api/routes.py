@@ -13,6 +13,7 @@ from app.utils.image import ImageManager
 from app.utils.rate_limit import rate_limit
 from app.utils.db import get_db
 from openai import OpenAI
+from app.models.generator import GenerationPipeline
 
 # Configure logger
 logger = logging.getLogger(__name__)
@@ -36,6 +37,11 @@ def handle_api_error(error):
     """Handle API errors"""
     response = jsonify(error.to_dict())
     response.status_code = error.status_code
+
+    # Add Retry-After header for rate limiting responses
+    if error.status_code == 429 and error.payload and "retry_after" in error.payload:
+        response.headers["Retry-After"] = str(error.payload["retry_after"])
+
     return response
 
 @bp.route("/models", methods=["GET"])
@@ -55,6 +61,16 @@ def get_models():
 def generate_image():
     """Submit an image generation request"""
     try:
+        # Check if generation is already in progress
+        if GenerationPipeline._generation_in_progress:
+            # If generation is in progress, return a 429 Too Many Requests
+            queue_size = QueueManager.get_queue_status()["pending"]
+            raise APIError(
+                f"System is currently processing another request. Please try again later. Queue size: {queue_size}",
+                429,
+                {"retry_after": 30}  # Suggest client retry after 30 seconds
+            )
+
         data = request.get_json()
         if not data:
             raise APIError("No data provided", 400)

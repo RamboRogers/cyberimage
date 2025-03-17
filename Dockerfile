@@ -38,5 +38,5 @@ USER appuser
 # Expose port
 EXPOSE 5050
 
-# Run with Gunicorn in production mode
-CMD ["gunicorn", "--workers=1", "--bind=0.0.0.0:5050", "run:app"]
+# Run with Gunicorn in production mode - ensure single thread processing
+CMD ["gunicorn", "--workers=1", "--threads=1", "--bind=0.0.0.0:5050", "--timeout=120", "run:app"]

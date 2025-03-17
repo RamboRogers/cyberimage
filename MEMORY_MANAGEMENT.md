@@ -70,10 +70,12 @@ This script can:
 
 To ensure stable operation:
 
-1. Run the application with a single worker in production:
+1. Run the application with a single worker and single thread in production:
    ```
-   gunicorn -w 1 -b 0.0.0.0:5050 run:app
+   gunicorn -w 1 --threads=1 -b 0.0.0.0:5050 --timeout=120 run:app
    ```
+
+   This ensures that only one request is processed at a time, preventing memory issues from concurrent processing.
 
 2. Monitor job status regularly:
    ```
