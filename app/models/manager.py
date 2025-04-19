@@ -8,7 +8,7 @@ import gc
 import os
 from typing import Dict, Optional, Union
 import torch
-from diffusers import FluxPipeline, DiffusionPipeline, StableDiffusionPipeline, BitsAndBytesConfig, SD3Transformer2DModel, StableDiffusion3Pipeline
+from diffusers import FluxPipeline, DiffusionPipeline, StableDiffusionPipeline, BitsAndBytesConfig, SD3Transformer2DModel, StableDiffusion3Pipeline, SanaSprintPipeline
 from app.models import AVAILABLE_MODELS
 from tqdm import tqdm
 from threading import Lock
@@ -27,42 +27,6 @@ class ModelLoadError(Exception):
 class ModelGenerationError(Exception):
     """Raised when image generation fails"""
     pass
-
-class CleanupThread(threading.Thread):
-    """Background thread to periodically cleanup memory"""
-
-    def __init__(self, manager, interval=300):
-        """Initialize the cleanup thread
-
-        Args:
-            manager: The ModelManager instance
-            interval: Cleanup interval in seconds (default: 300 = 5 minutes)
-        """
-        super().__init__(daemon=True)
-        self.manager = manager
-        self.interval = interval
-        self.stop_event = threading.Event()
-
-    def run(self):
-        """Run the cleanup thread"""
-        logger.info(f"Starting periodic memory cleanup thread (interval: {self.interval}s)")
-        while not self.stop_event.is_set():
-            # Sleep for the specified interval
-            for _ in range(self.interval):
-                if self.stop_event.is_set():
-                    break
-                time.sleep(1)
-
-            if not self.stop_event.is_set():
-                logger.info("Performing scheduled memory cleanup")
-                try:
-                    self.manager._force_memory_cleanup()
-                except Exception as e:
-                    logger.error(f"Error in scheduled cleanup: {str(e)}")
-
-    def stop(self):
-        """Stop the cleanup thread"""
-        self.stop_event.set()
 
 def get_optimal_device():
     """Determine the best available compute device, requiring GPU acceleration"""
@@ -116,16 +80,18 @@ class ModelManager:
         self._model_lock = Lock()
         # Generation is now handled by the GenerationPipeline class
         # This class only manages loading and unloading models
-        logger.info(f"ModelManager initialized (device={self._device}, model_cache_size={self._max_models})")
+
+        # --- Add Cache Tracking State ---
+        self._currently_loaded_model_key: Optional[str] = None
+        self._last_used_time: float = 0.0
+        self._cache_duration: int = 300 # 5 minutes
+        # --- End Cache Tracking State ---
+
+        logger.info(f"ModelManager initialized (device={self._device}, model_cache_size={self._max_models}, cache_duration={self._cache_duration}s)")
 
         # Add last health check timestamp
         self._last_health_check = time.time()
         self._health_check_interval = 20  # Check every 20 seconds (reduced from 60)
-
-        # Start periodic cleanup thread
-        self._cleanup_thread = CleanupThread(self, interval=300)  # Cleanup every 5 minutes
-        self._cleanup_thread.start()
-        logger.info("Started periodic memory cleanup thread")
 
     def check_system_memory(self):
         """Check system (CPU) memory usage and return a warning if it's too high"""
@@ -178,8 +144,10 @@ class ModelManager:
             memory_threshold = total_memory * 0.8
             if memory_allocated > memory_threshold:
                 logger.warning(f"GPU memory usage exceeds threshold ({memory_allocated:.2f}GB > {memory_threshold:.2f}GB)")
-                self._force_memory_cleanup()
-                return False  # Indicate unhealthy state
+                # --- Do not force cleanup based on threshold alone in this version ---
+                # self._force_memory_cleanup()
+                # return False  # Indicate unhealthy state
+                # --- ---
 
             return True  # Healthy
         except Exception as e:
@@ -339,21 +307,34 @@ class ModelManager:
             raise ValueError(f"Unknown model: {model_key}")
 
         with self._model_lock:
-            # Check if model is loaded and valid
-            if model_key in self._loaded_models:
-                try:
-                    model = self._loaded_models[model_key]
-                    # Verify model is in a valid state
-                    if hasattr(model, 'device'):
-                        logger.debug(f"Using already loaded model: {model_key}")
-                        return model
-                except Exception as e:
-                    logger.warning(f"Cached model {model_key} is invalid, reloading... Error: {str(e)}")
-                    del self._loaded_models[model_key]
+            current_time = time.time()
 
-            # ALWAYS unload all models and clear GPU memory before loading a new one
-            logger.info(f"Loading model: {model_key} (forcing cleanup first)")
-            self._force_memory_cleanup()
+            # --- Check Cache ---
+            if (model_key == self._currently_loaded_model_key and
+                model_key in self._loaded_models and
+                (current_time - self._last_used_time < self._cache_duration)):
+
+                try:
+                    # Verify model is still valid (basic check)
+                    model = self._loaded_models[model_key]
+                    if hasattr(model, 'device'):
+                        logger.info(f"Using cached model: {model_key} (last used {current_time - self._last_used_time:.1f}s ago)")
+                        self._last_used_time = current_time # Update last used time on access
+                        return model
+                    else:
+                        logger.warning(f"Cached model {model_key} seems invalid (no device attribute), reloading...")
+                except Exception as e:
+                    logger.warning(f"Error accessing cached model {model_key}, reloading... Error: {str(e)}")
+            # --- End Cache Check ---
+
+            # --- Load or Reload Model ---
+            # If cache miss, different model, or timeout expired, unload existing and load new
+            if self._currently_loaded_model_key:
+                logger.info(f"Unloading previous model ({self._currently_loaded_model_key}) to load {model_key}")
+            else:
+                logger.info(f"Loading model: {model_key} (no model currently cached)")
+
+            self._unload_all_models() # Clears cache tracking vars too
 
             # Additional cleanup to ensure maximum memory is available
             if self._device == "cuda":
@@ -397,6 +378,17 @@ class ModelManager:
                 if model_key == "sd-3.5" or model_type == "sd3":
                     # SD 3.5 has special handling with transformer
                     pipe = self.load_sd_pipeline(model_key)
+                elif model_key == "sana-sprint":
+                    logger.debug(f"Loading SanaSprint model from local path: {model_path}")
+                    pipe = SanaSprintPipeline.from_pretrained(
+                        model_path,
+                        torch_dtype=self._dtype,
+                        local_files_only=True
+                    )
+                    # --- Skip CPU offloading for SanaSprint to maximize speed ---
+                    pipe.to(self._device) # Move directly to the target device
+                    logger.info(f"Loaded SanaSprint model ({model_key}) directly to {self._device} (no CPU offload) using dtype: {self._dtype}")
+                    # --- ---
                 elif "flux" in model_key.lower() or model_type == "flux":
                     # Apply Flux profile to any model key containing "flux"
                     pipe = FluxPipeline.from_pretrained(
@@ -456,6 +448,9 @@ class ModelManager:
                     torch.cuda.empty_cache()
                     gc.collect()
 
+                # Update cache tracking AFTER successful load
+                self._currently_loaded_model_key = model_key
+                self._last_used_time = time.time()
                 self._loaded_models[model_key] = pipe
                 return pipe
 
@@ -471,6 +466,10 @@ class ModelManager:
             logger.debug(f"Unloading {key}")
             del self._loaded_models[key]
 
+        # Reset cache tracking
+        self._currently_loaded_model_key = None
+        self._last_used_time = 0.0
+
         if self._device == "cuda":
             torch.cuda.empty_cache()
             gc.collect()
@@ -485,23 +484,47 @@ class ModelManager:
             if pipe is None:
                 raise ModelLoadError(f"Failed to get model {model_key}")
 
-            # Set default generation parameters if not provided
-            kwargs.setdefault("num_inference_steps", 30)
-            kwargs.setdefault("guidance_scale", 7.5)
-            kwargs.setdefault("height", 1024)
-            kwargs.setdefault("width", 1024)
-            kwargs.setdefault("max_sequence_length", 512)
+            # --- Extract and Prepare Pipeline Arguments ---
+            pipe_args = {}
+            pipe_args["prompt"] = prompt
+
+            # Extract known arguments from kwargs (job settings)
+            # Use model's step_config for defaults where applicable
+            model_config = AVAILABLE_MODELS.get(model_key, {})
+            step_config = model_config.get("step_config", {})
+
+            # Steps (handle sana-sprint specifically)
+            if model_key == "sana-sprint":
+                pipe_args["num_inference_steps"] = 2
+                logger.info("Forcing num_inference_steps=2 for sana-sprint model.")
+            elif "fixed_steps" in step_config:
+                 pipe_args["num_inference_steps"] = step_config["fixed_steps"]
+            else:
+                 default_steps = step_config.get("steps", {}).get("default", 30)
+                 pipe_args["num_inference_steps"] = kwargs.get("num_inference_steps", default_steps)
+
+            # Guidance
+            default_guidance = 7.5
+            pipe_args["guidance_scale"] = kwargs.get("guidance_scale", default_guidance)
+
+            # Dimensions
+            default_height = 1024
+            default_width = 1024
+            pipe_args["height"] = kwargs.get("height", default_height)
+            pipe_args["width"] = kwargs.get("width", default_width)
+
+            # Max sequence length (if applicable to pipeline)
+            # Note: Not all pipelines use this. Pass only if needed or part of default args.
+            # pipe_args["max_sequence_length"] = kwargs.get("max_sequence_length", 512)
 
             # Handle negative prompt based on model type
-            negative_prompt = kwargs.pop("negative_prompt", None)
+            negative_prompt = kwargs.get("negative_prompt", None)
+            # Check if the specific pipeline type accepts negative_prompt (example for SD3)
             if negative_prompt and model_key == "sd-3.5":
-                kwargs["negative_prompt"] = negative_prompt
+                pipe_args["negative_prompt"] = negative_prompt
+            # --- End Argument Preparation ---
 
-            # Remove callback parameters - neither Flux nor SD-3.5 implementations seem to support them
-            kwargs.pop("callback", None)
-            kwargs.pop("callback_steps", None)
-
-            logger.info(f"Generating image with {model_key}: {prompt[:50]}...")
+            logger.info(f"Generating image with {model_key}: {prompt[:50]}... Args: { {k:v for k,v in pipe_args.items() if k != 'prompt'} }")
 
             # Create generator on appropriate device
             if self._device == "mps":
@@ -515,9 +538,7 @@ class ModelManager:
 
             # Standard generation for all models - no callbacks
             result = pipe(
-                prompt,
-                generator=generator,
-                **kwargs
+                **pipe_args # Pass prepared arguments directly
             ).images[0]
 
             # Success!

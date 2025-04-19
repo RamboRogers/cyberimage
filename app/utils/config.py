@@ -3,6 +3,7 @@ Configuration utilities for CyberImage
 """
 import os
 import logging
+import json
 from typing import Dict, List, Any
 
 logger = logging.getLogger(__name__)
@@ -11,8 +12,8 @@ def parse_model_config() -> Dict[str, Dict[str, Any]]:
     """
     Parse model configuration from environment variables.
 
-    Format: MODEL_<N>=<name>;<repo>;<description>;<source>;<requires_auth>
-    Example: MODEL_1=flux-1;black-forest-labs/FLUX.1-dev;FLUX base model;huggingface;true
+    Format: MODEL_<N>=<name>;<repo>;<description>;<source>;<requires_auth>[;<options_json>]
+    Example: MODEL_1=flux-1;black-forest-labs/FLUX.1-dev;FLUX base model;huggingface;true;{\"some_option\": true}
 
     Returns:
         Dict mapping model names to their configurations
@@ -76,11 +77,13 @@ def parse_model_config() -> Dict[str, Dict[str, Any]]:
 
                 parts = value.split(';')
 
+                # Updated check for minimum parts (5 required, 6th optional)
                 if len(parts) < 5:
-                    logger.warning(f"Invalid model configuration format for {key}: {value}")
+                    logger.warning(f"Invalid model configuration format for {key}: {value} (needs at least 5 parts)")
                     continue
 
                 name, repo, description, source, requires_auth = parts[:5]
+                options_json = parts[5] if len(parts) > 5 else None
                 name = name.strip()
 
                 # Further strip any quotes from individual parts
@@ -119,6 +122,29 @@ def parse_model_config() -> Dict[str, Dict[str, Any]]:
                 elif model_type in common_file_lists:
                     files = common_file_lists[model_type]
 
+                # Parse the optional JSON configuration
+                step_config = {}
+                if options_json:
+                    print(f"DEBUG: Raw options_json for {key}: {repr(options_json)}") # DEBUG
+                    options_json = options_json.strip('"\' ') # Clean up outer quotes/spaces
+                    print(f"DEBUG: Stripped options_json for {key}: {repr(options_json)}") # DEBUG
+                    # --- Explicitly replace escaped quotes ---
+                    options_json_cleaned = options_json.replace('\\"', '"')
+                    print(f"DEBUG: Cleaned options_json for {key}: {repr(options_json_cleaned)}") # DEBUG
+                    # --- ---
+                    try:
+                        parsed_options = json.loads(options_json_cleaned) # Use the cleaned string
+                        print(f"DEBUG: Parsed options for {key}: {parsed_options}") # DEBUG
+                        if isinstance(parsed_options, dict):
+                            step_config = parsed_options # Store the entire parsed dict
+                        else:
+                           logger.warning(f"Optional config for {key} is not a JSON object: {options_json_cleaned}")
+                    except json.JSONDecodeError as json_err:
+                        print(f"DEBUG: JSONDecodeError for {key}: {json_err}") # DEBUG
+                        logger.warning(f"Invalid JSON in optional config for {key}: {options_json_cleaned} - Error: {json_err}")
+                else: # DEBUG
+                    print(f"DEBUG: No options_json found for {key}") # DEBUG
+
                 models_config[name] = {
                     "repo": repo.strip(),
                     "description": description.strip(),
@@ -126,7 +152,8 @@ def parse_model_config() -> Dict[str, Dict[str, Any]]:
                     "requires_auth": requires_auth.strip().lower() == "true",
                     "download_enabled": download_enabled,
                     "type": model_type,
-                    "files": files
+                    "files": files,
+                    "step_config": step_config # Add parsed step config
                 }
 
                 # Store enabled models

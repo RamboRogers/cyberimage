@@ -105,6 +105,9 @@ async function initializeModels() {
         if (modelSelect && data.models) {
             modelSelect.innerHTML = '<option value="">Select Model</option>';
 
+            // Store full model data for later access
+            const modelsDataStore = {};
+
             // Store flux models for handling negative prompt visibility
             const fluxModels = [];
 
@@ -112,6 +115,9 @@ async function initializeModels() {
                 const option = document.createElement('option');
                 option.value = id;
                 option.textContent = `${id} - ${info.description}`;
+
+                // Store the full info object for this model
+                modelsDataStore[id] = info;
 
                 // Mark Flux models for special handling
                 if (id.toLowerCase().includes('flux')) {
@@ -123,24 +129,116 @@ async function initializeModels() {
                 modelSelect.appendChild(option);
             });
 
-            // Add change handler to hide/show negative prompt based on model
-            modelSelect.addEventListener('change', () => {
-                const selectedOption = modelSelect.options[modelSelect.selectedIndex];
-                const isFluxModel = selectedOption.dataset.isFlux === 'true' ||
-                                    fluxModels.includes(selectedOption.value);
+            // --- Add localStorage logic for Model ---
+            // Attempt to load last selected model ID
+            const lastModelId = localStorage.getItem('lastModelId');
+            if (lastModelId && modelSelect.querySelector(`option[value="${lastModelId}"]`)) {
+                modelSelect.value = lastModelId;
+            }
+            // --- End localStorage logic ---
 
-                // Toggle negative prompt visibility
-                if (negativePromptGroup) {
-                    if (isFluxModel) {
-                        negativePromptGroup.style.display = 'none';
-                        negativePromptGroup.querySelector('textarea').value = ''; // Clear value when hidden
-                    } else {
-                        negativePromptGroup.style.display = 'block';
+            // Add change handler to hide/show negative prompt based on model AND adjust steps
+            modelSelect.addEventListener('change', () => {
+                const selectedModelId = modelSelect.value;
+                const selectedModelData = modelsDataStore[selectedModelId];
+                const stepsSlider = document.getElementById('steps');
+                const stepsValueDisplay = document.getElementById('steps-value');
+
+                if (selectedModelId && selectedModelData) {
+                    const selectedOption = modelSelect.options[modelSelect.selectedIndex];
+                    const isFluxModel = selectedOption.dataset.isFlux === 'true' ||
+                                        fluxModels.includes(selectedOption.value);
+
+                    // Toggle negative prompt visibility
+                    if (negativePromptGroup) {
+                        if (isFluxModel) {
+                            negativePromptGroup.style.display = 'none';
+                            negativePromptGroup.querySelector('textarea').value = ''; // Clear value when hidden
+                        } else {
+                            negativePromptGroup.style.display = 'block';
+                        }
+                    }
+
+                    // --- Add Step Configuration Handling ---
+                    if (stepsSlider && stepsValueDisplay) {
+                        const stepConfig = selectedModelData.step_config || {};
+                        const lastStepsValue = localStorage.getItem('lastStepsValue');
+                        let currentSteps = null;
+
+                        stepsSlider.disabled = false;
+                        stepsSlider.classList.remove('disabled'); // Ensure styling reflects enabled state
+
+                        // 1. Check for fixed steps
+                        if (stepConfig.fixed_steps !== undefined) {
+                            currentSteps = stepConfig.fixed_steps;
+                            stepsSlider.value = currentSteps;
+                            stepsSlider.min = currentSteps;
+                            stepsSlider.max = currentSteps;
+                            stepsSlider.disabled = true;
+                            stepsSlider.classList.add('disabled'); // Ensure styling reflects disabled state
+                            console.log(`Model ${selectedModelId} has fixed steps: ${currentSteps}`);
+                        }
+                        // 2. Check for step range
+                        else if (stepConfig.steps && stepConfig.steps.min !== undefined && stepConfig.steps.max !== undefined) {
+                            const min = stepConfig.steps.min;
+                            const max = stepConfig.steps.max;
+                            const defaultVal = stepConfig.steps.default !== undefined ? stepConfig.steps.default : Math.round((min + max) / 2);
+
+                            stepsSlider.min = min;
+                            stepsSlider.max = max;
+                            // Prioritize localStorage value if valid within range, otherwise use default
+                            currentSteps = (lastStepsValue !== null && Number(lastStepsValue) >= min && Number(lastStepsValue) <= max)
+                                            ? Number(lastStepsValue)
+                                            : defaultVal;
+                            stepsSlider.value = currentSteps;
+                            console.log(`Model ${selectedModelId} has range: min=${min}, max=${max}, default=${defaultVal}. Using: ${currentSteps}`);
+                        }
+                        // 3. Fallback to default slider settings
+                        else {
+                            const defaultMin = 20;
+                            const defaultMax = 50;
+                            const defaultVal = 30;
+                            stepsSlider.min = defaultMin;
+                            stepsSlider.max = defaultMax;
+                            // Prioritize localStorage value if valid within range, otherwise use default
+                            currentSteps = (lastStepsValue !== null && Number(lastStepsValue) >= defaultMin && Number(lastStepsValue) <= defaultMax)
+                                            ? Number(lastStepsValue)
+                                            : defaultVal;
+                            stepsSlider.value = currentSteps;
+                             console.log(`Model ${selectedModelId} using default range. Using: ${currentSteps}`);
+                        }
+
+                        // Update display and save potentially adjusted value back to localStorage
+                        if (currentSteps !== null) {
+                            stepsValueDisplay.textContent = stepsSlider.value; // Display the final value set on the slider
+                            localStorage.setItem('lastStepsValue', stepsSlider.value);
+                        }
+                    }
+                    // --- End Step Configuration Handling ---
+                } else {
+                    // Handle case where "Select Model" is chosen or data is missing
+                     if (stepsSlider && stepsValueDisplay) {
+                        // Reset to defaults if no model is selected
+                        const defaultMin = 20;
+                        const defaultMax = 50;
+                        const defaultVal = 30;
+                        stepsSlider.min = defaultMin;
+                        stepsSlider.max = defaultMax;
+                        stepsSlider.value = defaultVal;
+                        stepsSlider.disabled = false;
+                        stepsSlider.classList.remove('disabled');
+                        stepsValueDisplay.textContent = defaultVal;
+                        // Optionally clear localStorage for steps? Or leave it?
+                        // Leaving it for now - if user re-selects a model, it will be reapplied if valid.
                     }
                 }
+
+                // --- Add localStorage saving for Model ---
+                localStorage.setItem('lastModelId', modelSelect.value);
+                // --- End localStorage saving ---
             });
 
-            // Trigger change event to set initial state
+            // Trigger change event AFTER setting potential localStorage value
             modelSelect.dispatchEvent(new Event('change'));
 
             // Enhance prompt input box
@@ -483,6 +581,23 @@ function initializeGenerationForm() {
         });
     });
 
+    // --- Add localStorage loading for Steps ---
+    const stepsSlider = document.getElementById('steps');
+    const stepsValueDisplay = document.getElementById('steps-value');
+    if (stepsSlider && stepsValueDisplay) {
+        const lastStepsValue = localStorage.getItem('lastStepsValue');
+        if (lastStepsValue) {
+            stepsSlider.value = lastStepsValue;
+            stepsValueDisplay.textContent = lastStepsValue;
+        }
+        // Add listener to save steps value on change
+        stepsSlider.addEventListener('input', () => {
+            localStorage.setItem('lastStepsValue', stepsSlider.value);
+            stepsValueDisplay.textContent = stepsSlider.value; // Ensure display updates here too
+        });
+    }
+    // --- End localStorage loading ---
+
     // Handle form submission
     form.addEventListener('submit', async (e) => {
         e.preventDefault();
@@ -492,6 +607,17 @@ function initializeGenerationForm() {
         // Hide any previous feedback
         feedbackSection.style.display = 'none';
         feedbackSection.classList.remove('active');
+
+        // --- Add localStorage saving on Submit ---
+        const currentModelId = document.getElementById('model')?.value;
+        const currentStepsValue = document.getElementById('steps')?.value;
+        if (currentModelId) {
+            localStorage.setItem('lastModelId', currentModelId);
+        }
+        if (currentStepsValue) {
+            localStorage.setItem('lastStepsValue', currentStepsValue);
+        }
+        // --- End localStorage saving ---
 
         try {
             const formData = new FormData(form);

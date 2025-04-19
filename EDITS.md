@@ -87,6 +87,39 @@
   - Performance tuning options
   - Default generation parameters
 
+### [DATE] Frontend Enhancements (localStorage)
+- Modified `app/static/js/main.js`:
+  - Added logic to `initializeModels` to load `lastModelId` from `localStorage` and apply it to the model select.
+  - Added logic to model select `change` event listener to save the selected `modelId` to `localStorage`.
+  - Added logic to `initializeGenerationForm` to load `lastStepsValue` from `localStorage` and apply it to the steps slider and display.
+  - Added event listener to steps slider (`input`) to save its value to `localStorage`.
+  - Added logic to form `submit` event listener to save both current `modelId` and `stepsValue` to `localStorage`.
+
+### [DATE] Backend Model Step Configuration
+- Updated `.env.example` and `.env`:
+  - Modified format comment to include optional `<options_json>`.
+  - Added `MODEL_4` entry for `sana-sprint` with `{\"fixed_steps\": 2}` configuration.
+- Modified `app/utils/config.py` (`parse_model_config` function):
+  - Updated logic to parse the optional 6th semicolon-separated part as a JSON string.
+  - Added JSON parsing with error handling for the options string.
+  - Stored the parsed dictionary (or empty dict if invalid/missing) into the `step_config` key for each model in `models_config`.
+- Verified `app/api/routes.py` (`/api/models` endpoint): Confirmed it returns the `AVAILABLE_MODELS` dictionary directly, which now includes the `step_config` data. No changes needed.
+
+### [DATE] Frontend Step Configuration Handling
+- Modified `app/static/js/main.js`:
+  - In `initializeModels`:
+    - Created `modelsDataStore` to hold the full configuration fetched for each model.
+    - Populated `modelsDataStore` while creating model select options.
+  - In the `#model` select `change` event listener:
+    - Retrieved the full data object (`selectedModelData`) for the chosen model ID from `modelsDataStore`.
+    - Accessed the `step_config` from `selectedModelData`.
+    - Added logic to check `step_config` for `fixed_steps` or a `steps` range (`min`, `max`, `default`).
+    - Updated the `#steps` slider's `min`, `max`, `value`, and `disabled` attributes based on the configuration.
+    - Prioritized `localStorage` value for steps if it's within the allowed range (for non-fixed models).
+    - Updated the `#steps-value` display.
+    - Saved the potentially adjusted steps value back to `localStorage`.
+    - Added fallback to reset slider to defaults if no model is selected or data is missing.
+
 ## Implementation Plan
 
 ### Phase 1: Basic Infrastructure

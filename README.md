@@ -265,13 +265,13 @@ CIVITAI_API_KEY=
 MODEL_1="flux-1;black-forest-labs/FLUX.1-dev;FLUX Dev;huggingface;true"
 MODEL_2="sd-3.5;stabilityai/stable-diffusion-3.5-large;Stable Diffusion 3.5;huggingface;true"
 MODEL_3="flux-schnell;black-forest-labs/FLUX.1-schnell;FLUX Schnell;huggingface;true"
-# MODEL_4="my-custom-model;civitai:12345;My Custom Model;civitai;true"
+MODEL_4="sana-sprint;Efficient-Large-Model/Sana_Sprint_1.6B_1024px_diffusers;Sana Sprint 1.6B;huggingface;true;{\"fixed_steps\": 2}"
 
 # Enable/disable downloading specific models (values: true/false)
 DOWNLOAD_MODEL_1=true
 DOWNLOAD_MODEL_2=true
 DOWNLOAD_MODEL_3=tue
-# DOWNLOAD_MODEL_4=false
+DOWNLOAD_MODEL_4=true
 ```
 
 ## 🖼️ Managing Models
@@ -302,6 +302,7 @@ To add a new model, simply add a new line to your `.env` file with an unused ind
 MODEL_1=flux-1;black-forest-labs/FLUX.1-dev;FLUX base model;huggingface;true
 MODEL_2=sd-3.5;stabilityai/stable-diffusion-3.5-large;Stable Diffusion 3.5;huggingface;true
 MODEL_3=animagine-xl;cagliostrolab/animagine-xl-4.0;Animagine XL;huggingface;true
+MODEL_4=sana-sprint;Efficient-Large-Model/Sana_Sprint_1.6B_1024px_diffusers;Sana Sprint 1.6B;huggingface;true;{"fixed_steps": 2}
 ```
 
 ### Disabling Models
@@ -309,8 +310,14 @@ MODEL_3=animagine-xl;cagliostrolab/animagine-xl-4.0;Animagine XL;huggingface;tru
 You can disable a model's download without removing it from the configuration:
 
 ```
+MODEL_1=flux-1;black-forest-labs/FLUX.1-dev;FLUX base model;huggingface;true
+MODEL_2=sd-3.5;stabilityai/stable-diffusion-3.5-large;Stable Diffusion 3.5;huggingface;true
 MODEL_3=animagine-xl;cagliostrolab/animagine-xl-4.0;Animagine XL;huggingface;true
+MODEL_4=sana-sprint;Efficient-Large-Model/Sana_Sprint_1.6B_1024px_diffusers;Sana Sprint 1.6B;huggingface;true;{"fixed_steps": 2}
+DOWNLOAD_MODEL_1=false
+DOWNLOAD_MODEL_2=false
 DOWNLOAD_MODEL_3=false
+DOWNLOAD_MODEL_4=false
 ```
 
 This keeps the model in the UI but prevents it from being downloaded automatically.
@@ -322,7 +329,8 @@ To completely remove a model, simply delete or comment out its configuration lin
 ```
 MODEL_1=flux-1;black-forest-labs/FLUX.1-dev;FLUX base model;huggingface;true
 MODEL_2=sd-3.5;stabilityai/stable-diffusion-3.5-large;Stable Diffusion 3.5;huggingface;true
-# MODEL_3=animagine-xl;cagliostrolab/animagine-xl-4.0;Animagine XL;huggingface;true
+MODEL_3=animagine-xl;cagliostrolab/animagine-xl-4.0;Animagine XL;huggingface;true
+MODEL_4=sana-sprint;Efficient-Large-Model/Sana_Sprint_1.6B_1024px_diffusers;Sana Sprint 1.6B;huggingface;true;{"fixed_steps": 2}
 ```
 
 ### Model Type Detection
@@ -344,13 +352,13 @@ Here's a complete example with multiple models:
 MODEL_1="flux-1;black-forest-labs/FLUX.1-dev;FLUX Dev;huggingface;true"
 MODEL_2="sd-3.5;stabilityai/stable-diffusion-3.5-large;Stable Diffusion 3.5;huggingface;true"
 MODEL_3="flux-schnell;black-forest-labs/FLUX.1-schnell;FLUX Schnell;huggingface;true"
-# MODEL_4="my-custom-model;civitai:12345;My Custom Model;civitai;true"
+MODEL_4="sana-sprint;Efficient-Large-Model/Sana_Sprint_1.6B_1024px_diffusers;Sana Sprint 1.6B;huggingface;true;{\"fixed_steps\": 2}"
 
 # Enable/disable downloading specific models (values: true/false)
 DOWNLOAD_MODEL_1=true
 DOWNLOAD_MODEL_2=true
 DOWNLOAD_MODEL_3=tue
-# DOWNLOAD_MODEL_4=false
+DOWNLOAD_MODEL_4=true
 ```
 
 After changing model configurations, restart the application to apply the changes.

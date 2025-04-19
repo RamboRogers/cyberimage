@@ -20,9 +20,11 @@ RUN apt-get update && apt-get install -y \
 RUN useradd -u 1000 -m -s /bin/bash appuser \
     && chown -R appuser:appuser /app
 
+RUN pip install --no-cache-dir uv
+
 # Install Python dependencies
 COPY --chown=appuser:appuser requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN uv pip install --no-cache-dir -r requirements.txt --system
 
 # Copy application code
 COPY --chown=appuser:appuser . .

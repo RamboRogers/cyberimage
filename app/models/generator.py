@@ -263,7 +263,9 @@ class GenerationPipeline:
                     GenerationPipeline._generation_in_progress = True
 
                     # Force cleanup before we start, especially if we've had previous generations
-                    self._force_memory_cleanup()
+                    # --- Comment out initial cleanup to allow caching ---
+                    # self._force_memory_cleanup()
+                    # --- --- --- --- --- --- --- --- --- --- --- --- ---
 
                     # Record which model we're about to use
                     GenerationPipeline._last_model_used = job["model_id"]
@@ -318,7 +320,9 @@ class GenerationPipeline:
                         # Force memory cleanup between images
                         if i < num_images - 1:
                             # Not the last image, so do cleanup before next generation
-                            self._force_memory_cleanup()
+                            # --- Comment out cleanup between images ---
+                            # self._force_memory_cleanup()
+                            # --- --- --- --- --- --- --- --- --- --- ---
                             GenerationPipeline._generation_in_progress = True  # Re-mark as in progress
                             GenerationPipeline._last_model_used = job["model_id"]  # Re-mark model
                 finally:
@@ -326,7 +330,10 @@ class GenerationPipeline:
                     GenerationPipeline._generation_in_progress = False
 
                     # Always do cleanup after generation, even if there's an error
-                    self._force_memory_cleanup()
+                    # --- Comment out cleanup in finally block to allow caching ---
+                    # self._force_memory_cleanup()
+                    # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
+                    pass # Keep finally block structure
 
             # Update job status to completed
             QueueManager.update_job_status(
