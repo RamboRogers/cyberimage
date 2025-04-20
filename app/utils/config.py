@@ -234,3 +234,8 @@ def get_available_models() -> Dict[str, Dict[str, Any]]:
         models[name]["name"] = config.get("display_name", name)
 
     return models
+
+# --- Rate Limit Configuration ---
+ENABLE_RATE_LIMIT = False  # Set to False to disable IP-based hourly rate limiting
+RATE_LIMIT_HOURLY = 10     # Default: Max 10 requests per hour per IP (only applies if ENABLE_RATE_LIMIT is True)
+# --- End Rate Limit Configuration ---
