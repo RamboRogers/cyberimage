@@ -364,6 +364,14 @@ class GenerationPipeline:
             # Force memory cleanup on error
             self._force_memory_cleanup()
 
+            # Terminate the application with an error code
+            # This will allow Docker to restart the container with a clean state
+            print(f"\n🚨 Critical failure in image generation. Terminating process to allow container restart.")
+            sys.stdout.flush()
+
+            # Use os._exit for immediate termination without cleanup
+            os._exit(1)
+
             return None
 
     def add_job(self, job: Dict):

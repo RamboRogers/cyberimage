@@ -25,6 +25,7 @@
             <div class="nav-links">
                 <a href="{{ url_for('main.index') }}" class="nav-link active">Generate</a>
                 <a href="{{ url_for('main.gallery') }}" class="nav-link">Gallery</a>
+                <a href="{{ url_for('admin.admin_panel') }}" class="nav-link">Admin</a>
             </div>
             <button class="nav-toggle" aria-label="Toggle navigation">
                 <span class="nav-toggle-icon"></span>
@@ -160,6 +161,10 @@
                                         <span id="guidance-value" class="value-display">7.5</span>
                                     </div>
                                 </div>
+                                <div class="input-group compact keep-prompt-group">
+                                    <label for="keep_prompt">Keep Prompt</label>
+                                    <input type="checkbox" id="keep_prompt" name="keep_prompt" class="checkbox-field">
+                                </div>
                             </div>
                         </div>
 
@@ -204,6 +209,9 @@
                     <img src="{{ url_for('api.get_image', image_id=image.id) }}"
                          alt="{{ image.prompt[:50] }}..."
                          loading="lazy">
+                    <div class="quick-actions">
+                        <button class="action-copy-prompt" title="Copy Prompt" data-prompt="{{ image.prompt }}">📋</button>
+                    </div>
                     <div class="gallery-item-info">
                         <p class="prompt">{{ image.prompt[:100] }}...</p>
                         <p class="model">{{ image.model_id }}</p>

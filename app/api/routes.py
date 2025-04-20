@@ -61,16 +61,6 @@ def get_models():
 def generate_image():
     """Submit an image generation request"""
     try:
-        # Check if generation is already in progress
-        if GenerationPipeline._generation_in_progress:
-            # If generation is in progress, return a 429 Too Many Requests
-            queue_size = QueueManager.get_queue_status()["pending"]
-            raise APIError(
-                f"System is currently processing another request. Please try again later. Queue size: {queue_size}",
-                429,
-                {"retry_after": 30}  # Suggest client retry after 30 seconds
-            )
-
         data = request.get_json()
         if not data:
             raise APIError("No data provided", 400)

@@ -18,6 +18,8 @@ document.addEventListener('DOMContentLoaded', () => {
     initializeMobileNav();
     initializeQueueStatusIndicator();
     initializeEnhancedPromptUI();
+    initializeKeepPromptCheckbox();
+    initializeCopyPromptButtons();
 
     // Add direct event listener for copy button as a fallback
     const copyPromptBtn = document.getElementById('copyPrompt');
@@ -616,6 +618,17 @@ function initializeGenerationForm() {
         }
         if (currentStepsValue) {
             localStorage.setItem('lastStepsValue', currentStepsValue);
+        }
+
+        // Save the prompt when generating an image if "Keep Prompt" is checked
+        const keepPromptCheckbox = document.getElementById('keep_prompt');
+        if (keepPromptCheckbox && keepPromptCheckbox.checked) {
+            const promptInput = document.getElementById('prompt-input');
+            const promptToKeep = promptInput.value;
+            if (promptToKeep) {
+                localStorage.setItem('keptPrompt', promptToKeep);
+                console.log('Prompt saved at generation time:', promptToKeep.substring(0, 50) + (promptToKeep.length > 50 ? '...' : ''));
+            }
         }
         // --- End localStorage saving ---
 
@@ -1646,4 +1659,89 @@ function formatTime(seconds) {
         const minutes = Math.round((seconds % 3600) / 60);
         return `${hours}h ${minutes}m`;
     }
+}
+
+// Initialize Keep Prompt checkbox functionality
+function initializeKeepPromptCheckbox() {
+    const checkbox = document.getElementById('keep_prompt');
+    const promptInput = document.getElementById('prompt-input');
+
+    if (!checkbox || !promptInput) return;
+
+    // Load saved state
+    const savedKeep = localStorage.getItem('keepPromptChecked');
+    const savedPrompt = localStorage.getItem('keptPrompt');
+
+    if (savedKeep === 'true') {
+        checkbox.checked = true;
+        if (savedPrompt !== null && promptInput.value.trim() === '') {
+            promptInput.value = savedPrompt;
+        }
+    }
+
+    // Save checkbox state changes
+    checkbox.addEventListener('change', () => {
+        localStorage.setItem('keepPromptChecked', checkbox.checked);
+        if (!checkbox.checked) {
+            // If user unchecks, also clear saved prompt
+            localStorage.removeItem('keptPrompt');
+        }
+    });
+}
+
+// Initialize copy prompt buttons in the gallery
+function initializeCopyPromptButtons() {
+    const copyButtons = document.querySelectorAll('.action-copy-prompt');
+
+    copyButtons.forEach(button => {
+        button.addEventListener('click', (e) => {
+            e.stopPropagation(); // Prevent opening the modal
+
+            const promptText = button.dataset.prompt;
+            if (!promptText) return;
+
+            // Copy to clipboard
+            const copyToClipboard = async (text) => {
+                try {
+                    // Modern method - Clipboard API
+                    await navigator.clipboard.writeText(text);
+                    return true;
+                } catch (err) {
+                    console.warn('Clipboard API failed:', err);
+
+                    // Fallback method - create temporary textarea
+                    try {
+                        const textarea = document.createElement('textarea');
+                        textarea.value = text;
+                        textarea.style.position = 'fixed';
+                        textarea.style.opacity = '0';
+                        document.body.appendChild(textarea);
+                        textarea.select();
+                        const success = document.execCommand('copy');
+                        document.body.removeChild(textarea);
+                        return success;
+                    } catch (fallbackErr) {
+                        console.error('Fallback clipboard method failed:', fallbackErr);
+                        return false;
+                    }
+                }
+            };
+
+            // Show copy feedback
+            const originalText = button.innerHTML;
+            copyToClipboard(promptText).then(success => {
+                if (success) {
+                    button.innerHTML = '✓';
+                    button.classList.add('copied');
+                } else {
+                    button.innerHTML = '❌';
+                }
+
+                setTimeout(() => {
+                    button.innerHTML = originalText;
+                    button.classList.remove('copied');
+                }, 2000);
+            });
+        });
+    });
 }

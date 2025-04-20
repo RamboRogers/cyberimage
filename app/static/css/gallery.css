@@ -229,12 +229,13 @@
 
 .quick-actions {
     position: absolute;
-    top: 10px;
-    right: 10px;
+    top: 5px;
+    right: 5px;
     display: flex;
     gap: 5px;
     opacity: 0;
-    transition: opacity 0.3s ease;
+    transition: opacity 0.2s ease-in-out;
+    z-index: 5;
 }
 
 .gallery-item:hover .quick-actions {
@@ -242,18 +243,27 @@
 }
 
 .quick-actions button {
-    background: rgba(0, 0, 0, 0.8);
-    border: 1px solid var(--neon-green);
+    background: rgba(0, 0, 0, 0.7);
+    border: 1px solid var(--neon-green-dim);
     color: var(--neon-green);
-    padding: 5px;
-    border-radius: 5px;
+    border-radius: 4px;
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     cursor: pointer;
-    transition: all 0.3s ease;
+    transition: all 0.2s;
 }
 
 .quick-actions button:hover {
-    background: var(--neon-green);
-    color: var(--background);
+    background: rgba(0, 0, 0, 0.9);
+    transform: scale(1.1);
+    box-shadow: 0 0 5px var(--neon-green);
+}
+
+.quick-actions button.copied {
+    background: rgba(0, 170, 0, 0.7);
 }
 
 .item-details {

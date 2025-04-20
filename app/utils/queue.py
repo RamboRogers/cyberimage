@@ -157,8 +157,13 @@ class QueueManager:
 
                 # Remove the image IDs from the error message
                 error_message = error_message.split("IMAGE_IDS:")[0].strip()
+            except json.JSONDecodeError:
+                # If JSON decoding fails, it means image IDs weren't stored correctly
+                # or the message format is unexpected. Silently ignore for status checks.
+                pass
             except Exception as e:
-                logger.warning(f"Error parsing image IDs from error message: {e}")
+                # Log other unexpected errors during parsing
+                logger.error(f"Unexpected error parsing image IDs from message for job {job['id']}: {e}", exc_info=True)
 
         # Determine progress state more accurately
         progress = {
