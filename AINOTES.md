@@ -1,7 +1,8 @@
 # Project Notes
 
 ## Current State
-- **Removed IP-based rate limiting functionality** entirely:
+- **Fixed `ModuleNotFoundError`** by removing the unused import for `rate_limit` in `app/api/routes.py`.
+- Removed IP-based rate limiting functionality entirely:
     - Removed `@rate_limit` decorator from `app/api/routes.py`.
     - Deleted `app/utils/rate_limit.py`.
     - Removed related config from `instance/config.py` and `app/__init__.py`.
@@ -13,6 +14,7 @@
 - Refer to `API.md` for API definitions.
 - `app/__init__.py`: Creates Flask app, loads config (from mapping and `instance/config.py`). *Rate limit config removed.*
 - `instance/config.py`: Instance-specific configuration overrides. *Rate limit config removed.*
+- `app/api/routes.py`: Defines API endpoints. *Removed rate_limit import.*
 - `app/models/generator.GenerationPipeline`: Manages job queue and image generation.
   - `process_job`: Processes a single job (modified to keep model loaded).
   - `_force_memory_cleanup`: (Now less frequently used) Unloads models and clears GPU memory.
