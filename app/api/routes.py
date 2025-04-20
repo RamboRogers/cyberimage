@@ -10,7 +10,6 @@ from app.api import bp
 from app.models import AVAILABLE_MODELS, DEFAULT_MODEL
 from app.utils.queue import QueueManager
 from app.utils.image import ImageManager
-from app.utils.rate_limit import rate_limit
 from app.utils.db import get_db
 from openai import OpenAI
 from app.models.generator import GenerationPipeline
