@@ -1,5 +1,12 @@
 # AI Edits Log
 
+## Edit 2024-07-27_05 (Fix Missing Import)
+
+- **File:** `app/api/routes.py`
+- **Change:** Removed the import statement `from app.utils.rate_limit import rate_limit`.
+- **Reason:** This import was causing a `ModuleNotFoundError` during startup because the `app/utils/rate_limit.py` file was deleted in the previous step (Edit 2024-07-27_04) as part of removing the rate limiting feature.
+- **Aligned with AINOTES:** Yes, notes updated.
+
 ## Edit 2024-07-27_04 (Rate Limit Removal)
 
 - **Files:**
