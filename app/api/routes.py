@@ -57,7 +57,6 @@ def get_models():
         raise APIError("Failed to get models", 500)
 
 @bp.route("/generate", methods=["POST"])
-@rate_limit
 def generate_image():
     """Submit an image generation request"""
     try:
