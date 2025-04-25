@@ -186,6 +186,66 @@ def get_queue(): # Handles GET /api/queue
   - This accommodates both properly typed models from the server and models that are only identifiable by their ID.
   - Added fallback description text for models missing description field.
 
+- **LTX-Video Output Corruption:**
+  - Issue: Video output from LTX-Video model (T2V) was reported as corrupt (e.g., "green lines"), then distorted but recognizable figures.
+  - Investigation 1: Logs showed `DEBUG: Before export_to_video - frames type is not ndarray: <class 'list'>`.
+  - Root Cause 1: The `generate_text_to_video` function returned a list, but `export_to_video` expects NumPy array.
+  - Fix 1: Added NumPy conversion in `generator.py`. (Later removed)
+  - Investigation 2: Output still corrupt after Fix 1.
+  - Potential Root Cause 2a: Mismatch between dtypes used in `get_model` vs reference.
+  - Fix 2a: Modified `get_model` in `manager.py` to strictly use `torch.bfloat16`.
+  - Potential Root Cause 2b: Frames returned might be tensors, causing incorrect conversion.
+  - Fix 2b: Added debug logging in `generate_text_to_video` (`manager.py`) to inspect frame format.
+  - Investigation 3: Generation failed with `NameError: name 'Image' is not defined` in debug log.
+  - Root Cause 3: Missing `PIL.Image` import in `manager.py`.
+  - Fix 3: Added `from PIL import Image` to `manager.py`.
+  - Investigation 4: Removed explicit NumPy conversion from `generator.py` to align flow with reference. Video now visible but distorted.
+  - Potential Root Cause 4: Missing `negative_prompt`. Application default was `None` if empty, reference uses specific quality prompt.
+  - Fix 4: Modified `generate_text_to_video` in `manager.py` to use reference negative prompt (`"worst quality..."`) as default if none provided by user.
+  - Status: LTX-Video aligned with reference negative prompt. Explicit conversion removed. Debug logging remains in `manager.py` `generate_text_to_video`.
+
+- **I2V Model Loading Failure:**
+  - Issue: I2V job failed with `OSError` and `LocalEntryNotFoundError` when loading `image_encoder`.
+  - Root Cause: Required model component files were missing locally, and loading code used `local_files_only=True`, preventing download.
+  - Fix: Changed `local_files_only=True` to `local_files_only=False` for the I2V component loading calls (`CLIPVisionModel`, `AutoencoderKLWan`, `WanImageToVideoPipeline`) in `app/models/manager.py` (`get_model` function).
+  - Status: Implemented. Requires testing I2V again (will download missing files on first run).
+
+- **I2V Model Loading Failure (Update):**
+  - Issue: I2V job still failed with `OSError: ... does not appear to have a file named pytorch_model.bin...` even after allowing downloads.
+  - Root Cause 1: The configured repository ID in `.env` (`Wan-AI/Wan2.1-I2V-14B-480P`) was likely incorrect. The reference uses `Wan-AI/Wan2.1-I2V-14B-480P-Diffusers`, which has the expected file structure.
+  - Root Cause 2: VAE was loaded using `model_path` instead of the repository ID, inconsistent with other components.
+  - Fix 1 (Manual): User needs to update `.env` file to set the `wan-i2v-14b` model repo to `Wan-AI/Wan2.1-I2V-14B-480P-Diffusers`.
+  - Fix 2 (Code): Changed `AutoencoderKLWan.from_pretrained` in `manager.py` to load from `model_config['repo']` instead of `model_path`.
+  - Status: Code fix applied. Manual `.env` update required by user. Requires testing I2V again.
+
+- **I2V Job Routing Failure:**
+  - Issue: I2V job was processed by the Image Generation logic (`generate_image`) instead of I2V logic, causing `TypeError: WanImageToVideoPipeline.__call__() missing 1 required positional argument: 'image'`.
+  - Root Cause: The `/generate_video` API route in `app/api/routes.py` was setting the job type as `"video"` instead of the expected `"i2v"`.
+  - Fix: Updated the `/generate_video` route to set `settings['type'] = 'i2v'`.
+  - Status: Implemented.
+
+- **I2V Out-of-Memory (OOM) Error:**
+  - Issue: I2V job failed with `CUDA out of memory` error during generation.
+  - Root Cause: The generation resolution calculated based on the source image (e.g., 960x960) was too large for the `wan-i2v-14b` model within the available VRAM (24GB), even with CPU offloading.
+  - Fix: Modified the call to `generate_image_to_video` in `app/models/generator.py` to explicitly pass `max_video_area=480*832`. This forces the image pre-processing step (`_aspect_ratio_resize`) to use a smaller target resolution, similar to the reference code, reducing memory usage.
+  - Status: Implemented. Requires testing I2V again.
+
+- **Integrate LTX for I2V (Experimental GGUF Approach):**
+  - Goal: Allow using the LTX GGUF model for Image-to-Video.
+  - Method: Attempt to load `LTXImageToVideoPipeline` by injecting the GGUF transformer (deviation from LTX I2V reference code).
+  - Fix 1: Modified `get_model` in `manager.py` to check if `model_type` is `i2v` and `source` is `gguf_url`. If so, load GGUF transformer and attempt to pass it to `LTXImageToVideoPipeline.from_pretrained`. Logs warning about experimental nature.
+  - Fix 2: Modified `generate_image_to_video` in `manager.py` to check `isinstance(pipe, LTXImageToVideoPipeline)`. If true, skip `_aspect_ratio_resize`, use LTX reference parameters (width, height, frames, steps, negative prompt default), and call the pipeline. Otherwise, use existing Wan I2V logic.
+  - Issue: Loading failed with `NameError: name 'LTXImageToVideoPipeline' is not defined`.
+  - Root Cause: Missing import for `LTXImageToVideoPipeline` in `manager.py`.
+  - Fix 3: Added `LTXImageToVideoPipeline` to the `diffusers` import statement in `manager.py`.
+  - Status: Implemented. Requires testing LTX GGUF model with an I2V job.
+
+- **Media Deletion Failure on Index Page:**
+  - Issue: Delete button worked on gallery page but failed with "NOT FOUND" on index page (recent generations).
+  - Root Cause: Delete handler in `main.js` (used by index page) constructed the API URL dynamically (`/api/${mediaType}/${mediaId}`). This failed for videos as `/api/video/...` doesn't exist for DELETE. The handler in `gallery.js` always used `/api/image/...`.
+  - Fix: Modified the delete handler in `main.js` to always use the `/api/image/${mediaId}` endpoint for deletion, regardless of `mediaType`.
+  - Status: Implemented. Requires testing delete on index page.
+
 ## UI Updates (Revised)
 - **`index.html` / `main.js`:**
   - **Main form now supports T2I and T2V model selection.**

@@ -239,3 +239,64 @@ All planned phases are now complete!
 - **Fix:** Modified `generate_text_to_video` in `app/models/manager.py` to default to the reference negative prompt if none is provided in the job settings.
 - **Affected Files:**
   - `app/models/manager.py`
+
+## [YYYY-MM-DD] - Fix I2V Model Loading Error
+
+- **Issue:** Image-to-Video generation failed with `OSError: We couldn't connect to 'https://huggingface.co' ...` and `LocalEntryNotFoundError`.
+- **Root Cause:** The `wan-i2v-14b` model's components (specifically `image_encoder`) were missing from the local cache, and the loading code in `get_model` used `local_files_only=True`, preventing download.
+- **Fix:** Modified the `CLIPVisionModel.from_pretrained`, `AutoencoderKLWan.from_pretrained`, and `WanImageToVideoPipeline.from_pretrained` calls within the I2V loading block in `app/models/manager.py` to use `local_files_only=False`. This allows missing components to be downloaded.
+- **Affected Files:**
+  - `app/models/manager.py`
+
+## [YYYY-MM-DD] - Fix I2V Model Structure Error
+
+- **Issue:** Image-to-Video generation failed again with `OSError: ... does not appear to have a file named pytorch_model.bin...`.
+- **Investigation:** Compared model ID used by application to reference code.
+- **Root Cause:** Application likely configured with incorrect repo ID (`Wan-AI/Wan2.1-I2V-14B-480P` instead of `Wan-AI/Wan2.1-I2V-14B-480P-Diffusers`). Also, VAE loading used local path instead of repo ID.
+- **Fix:**
+    1.  Instructed user to update `.env` to use `Wan-AI/Wan2.1-I2V-14B-480P-Diffusers` repo ID.
+    2.  Modified `AutoencoderKLWan.from_pretrained` call in `app/models/manager.py` to load from the repository ID (`model_config['repo']`) instead of the local path.
+- **Affected Files:**
+    - `app/models/manager.py`
+
+## [YYYY-MM-DD] - Fix I2V Job Routing
+
+- **Issue:** I2V job processed by image generation logic, causing `TypeError` due to missing `image` argument.
+- **Root Cause:** The `/generate_video` API route in `app/api/routes.py` incorrectly set the job type to `"video"` instead of `"i2v"`.
+- **Fix:** Modified `/generate_video` route in `app/api/routes.py` to set `settings['type'] = 'i2v'`.
+- **Affected Files:**
+    - `app/api/routes.py`
+
+## [YYYY-MM-DD] - Fix Media Deletion on Index Page
+
+- **Issue:** Delete button failed with "NOT FOUND" error on index page for videos, while working on gallery page.
+- **Root Cause:** The delete event handler in `main.js` (for index page) dynamically built the API endpoint using `mediaType` (`/api/${mediaType}/${mediaId}`), hitting non-existent `/api/video/...` DELETE endpoint. `gallery.js` correctly always used `/api/image/...`.
+- **Fix:** Modified the delete event handler in `main.js` to always use the `/api/image/${mediaId}` endpoint, regardless of media type.
+- **Affected Files:**
+    - `app/static/js/main.js`
+
+## [YYYY-MM-DD] - Fix I2V Out-of-Memory Error
+
+- **Issue:** Image-to-Video generation failed with `CUDA out of memory`.
+- **Root Cause:** The calculated generation resolution (e.g., 960x960) was too high for the available VRAM when using the `wan-i2v-14b` model. The reference code used a smaller `max_area`.
+- **Fix:** Added `max_video_area=480*832` parameter to the `generate_image_to_video` call in `app/models/generator.py` to explicitly limit the resolution used during image preprocessing.
+- **Affected Files:**
+    - `app/models/generator.py`
+
+## [YYYY-MM-DD] - Add Experimental LTX GGUF I2V Support
+
+- **Goal:** Attempt to use the pre-loaded LTX GGUF transformer for Image-to-Video.
+- **Caveat:** This deviates from LTX I2V reference code and might not be compatible.
+- **Fixes:**
+    1.  Modified `get_model` (`manager.py`): If `model_type` is `i2v` and source is `gguf_url`, load GGUF transformer and attempt to pass it to `LTXImageToVideoPipeline.from_pretrained`. Log warnings.
+    2.  Modified `generate_image_to_video` (`manager.py`): Added branching logic based on `isinstance(pipe, LTXImageToVideoPipeline)`. For LTX, skip image resizing, use LTX-specific parameters (dimensions, frames, steps), include default negative prompt. For Wan, keep existing logic.
+- **Affected Files:**
+    - `app/models/manager.py`
+
+## [YYYY-MM-DD] - Fix LTX I2V NameError
+
+- **Issue:** LTX I2V loading failed with `NameError: name 'LTXImageToVideoPipeline' is not defined`.
+- **Root Cause:** The import for `LTXImageToVideoPipeline` was missing from `app/models/manager.py`.
+- **Fix:** Added `LTXImageToVideoPipeline` to the `diffusers` import statement at the top of `app/models/manager.py`.
+- **Affected Files:**
+    - `app/models/manager.py`

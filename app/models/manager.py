@@ -30,7 +30,7 @@ from transformers import CLIPVisionModel
 # --- End Video Generation Imports ---
 
 # --- Add LTX-Video GGUF Imports --- #
-from diffusers import LTXPipeline, LTXVideoTransformer3DModel
+from diffusers import LTXPipeline, LTXVideoTransformer3DModel, LTXImageToVideoPipeline
 try:
     from diffusers.utils.import_utils import is_torch_available
 except ImportError:
@@ -450,56 +450,99 @@ class ModelManager:
                 # --- Handle Video Model Type --- #
                 elif model_type == "i2v":
                     logger.info(f"Loading Image-to-Video (I2V) model: {model_key}")
-                    # Determine dtype for video model (needs careful consideration)
-                    # Using float32 for VAE/Image Encoder as per example, bfloat16 for pipeline
-                    # This might need adjustment based on hardware/performance testing
-                    video_dtype = torch.bfloat16 if self._dtype == torch.bfloat16 else torch.float16
-                    vae_dtype = torch.float32
-                    encoder_dtype = torch.float32
 
-                    logger.debug(f"Loading video components: VAE ({vae_dtype}), Image Encoder ({encoder_dtype}), Pipeline ({video_dtype})")
+                    # --- Check if it's the LTX GGUF model --- #
+                    # NOTE: Assuming the same key ('LTX-Video') is used for GGUF I2V for now.
+                    # This might need adjustment based on actual config key.
+                    is_ltx_gguf_i2v = model_config.get("source") == "gguf_url"
 
-                    image_encoder = CLIPVisionModel.from_pretrained(
-                        model_config['repo'],
-                        subfolder="image_encoder",
-                        torch_dtype=encoder_dtype,
-                        local_files_only=True, # Assume local for now
-                        cache_dir=model_path
-                    )
-                    vae = AutoencoderKLWan.from_pretrained(
-                        model_path,
-                        subfolder="vae",
-                        torch_dtype=vae_dtype,
-                        local_files_only=True, # Assume local for now
-                        cache_dir=model_path
-                    )
-                    pipe = WanImageToVideoPipeline.from_pretrained(
-                        model_config['repo'],
-                        vae=vae,
-                        image_encoder=image_encoder,
-                        torch_dtype=video_dtype,
-                        local_files_only=True, # Assume local for now
-                        cache_dir=model_path
-                    )
+                    if is_ltx_gguf_i2v:
+                        logger.warning("Attempting EXPERIMENTAL load of LTXImageToVideoPipeline with GGUF transformer.")
+                        if GGUFQuantizationConfig is None:
+                            raise ModelLoadError("GGUFQuantizationConfig is required but was not found.")
 
-                    # --- Conditional Memory Optimization for Video Models --- #
-                    # Check config for explicit offload setting, default to True if not specified
-                    should_offload = model_config.get("step_config", {}).get("offload", True)
-                    # Example: Don't offload specific small models like wan-t2v-1.3b
-                    if model_key == "wan-t2v-1.3b":
-                        should_offload = False
+                        gguf_files = list(Path(model_path).glob("*.gguf"))
+                        if not gguf_files:
+                            raise ModelLoadError(f"No .gguf file found for LTX I2V: {model_path}")
+                        gguf_file_path = gguf_files[0]
 
-                    if should_offload:
+                        dtype_to_use = torch.bfloat16
+                        quant_config = GGUFQuantizationConfig(compute_dtype=dtype_to_use)
+
+                        logger.info(f"Loading LTX Transformer from GGUF: {gguf_file_path}")
+                        transformer = LTXVideoTransformer3DModel.from_single_file(
+                            str(gguf_file_path),
+                            quantization_config=quant_config,
+                            torch_dtype=dtype_to_use,
+                        )
+
+                        logger.info("Loading LTXImageToVideoPipeline base and injecting GGUF transformer...")
                         try:
-                            pipe = apply_memory_optimizations(pipe)
-                            logger.info(f"Applied memory optimizations (CPU offload) to video model {model_key}")
-                        except Exception as mem_e:
-                            logger.warning(f"Could not apply standard CPU offload to {model_key}: {mem_e}. Moving to device directly.")
-                            pipe.to(self._device)
+                            # Attempt to use LTXImageToVideoPipeline with the GGUF transformer
+                            pipe = LTXImageToVideoPipeline.from_pretrained(
+                                "Lightricks/LTX-Video", # Base pipeline definition
+                                transformer=transformer, # Pass GGUF transformer
+                                torch_dtype=dtype_to_use,
+                                local_files_only=False
+                            )
+                        except TypeError as te:
+                            logger.error(f"Failed to load LTXImageToVideoPipeline with GGUF transformer: {te}")
+                            logger.error("This likely means LTXImageToVideoPipeline doesn't accept a custom transformer this way.")
+                            raise ModelLoadError("Incompatible GGUF transformer for LTXImageToVideoPipeline") from te
+
+                        pipe = apply_memory_optimizations(pipe) # Apply optimizations
+                        logger.info(f"Loaded LTX GGUF for I2V ({model_key}) with CPU offloading (Experimental)")
+
                     else:
-                        logger.info(f"Skipping CPU offload for video model {model_key}, loading directly to {self._device}")
-                        pipe.to(self._device)
-                    # --- End Conditional Optimization --- #
+                        # --- Existing Wan I2V Logic --- #
+                        video_dtype = torch.bfloat16 if self._dtype == torch.bfloat16 else torch.float16
+                        vae_dtype = torch.float32
+                        encoder_dtype = torch.float32
+
+                        logger.debug(f"Loading Wan video components: VAE ({vae_dtype}), Image Encoder ({encoder_dtype}), Pipeline ({video_dtype})")
+
+                        image_encoder = CLIPVisionModel.from_pretrained(
+                            model_config['repo'],
+                            subfolder="image_encoder",
+                            torch_dtype=encoder_dtype,
+                            local_files_only=False, # Allow download if missing
+                            cache_dir=model_path
+                        )
+                        vae = AutoencoderKLWan.from_pretrained(
+                            model_config['repo'], # Use repo ID like other components
+                            subfolder="vae",
+                            torch_dtype=vae_dtype,
+                            local_files_only=False, # Allow download if missing
+                            cache_dir=model_path
+                        )
+                        pipe = WanImageToVideoPipeline.from_pretrained(
+                            model_config['repo'],
+                            vae=vae,
+                            image_encoder=image_encoder,
+                            torch_dtype=video_dtype,
+                            local_files_only=False, # Allow download if missing
+                            cache_dir=model_path
+                        )
+                        # --- End Wan I2V Logic --- #
+
+                        # --- Conditional Memory Optimization for Video Models --- #
+                        # Check config for explicit offload setting, default to True if not specified
+                        should_offload = model_config.get("step_config", {}).get("offload", True)
+                        # Example: Don't offload specific small models like wan-t2v-1.3b
+                        if model_key == "wan-t2v-1.3b":
+                            should_offload = False
+
+                        if should_offload:
+                            try:
+                                pipe = apply_memory_optimizations(pipe)
+                                logger.info(f"Applied memory optimizations (CPU offload) to video model {model_key}")
+                            except Exception as mem_e:
+                                logger.warning(f"Could not apply standard CPU offload to {model_key}: {mem_e}. Moving to device directly.")
+                                pipe.to(self._device)
+                        else:
+                            logger.info(f"Skipping CPU offload for video model {model_key}, loading directly to {self._device}")
+                            pipe.to(self._device)
+                        # --- End Conditional Optimization --- #
 
                 elif model_type == "t2v":
                     logger.info(f"Loading Text-to-Video (T2V) model: {model_key}")
@@ -785,70 +828,104 @@ class ModelManager:
             model_desc = model_info.get("description", "Unknown model")
             print(f"\n🎬 GENERATING I2V VIDEO with model: {model_key} - {model_desc}")
             print(f"   • Source Image: {source_image_path}")
-            print(f"   • Video Prompt: {video_prompt[:100]}" + ('...' if len(video_prompt) > 100 else ''))
-
-            # Log key parameters
-            guidance = kwargs.get("guidance_scale", 5.5)
-            fps = kwargs.get("fps", 16)
-            print(f"   • Parameters: Guidance={guidance}, FPS={fps}")
-            sys.stdout.flush()
-            # End enhanced logging
+            print(f"   • Video Prompt: {video_prompt[:100]}" + ('... ' if len(video_prompt) > 100 else ''))
 
             # 1. Get model
             pipe = self.get_model(model_key)
             if pipe is None:
                 raise ModelLoadError(f"Failed to get video model {model_key}")
 
-            # Check if it's the correct pipeline type (optional but good practice)
-            if not isinstance(pipe, WanImageToVideoPipeline):
-                logger.warning(f"Model {model_key} loaded, but is not a WanImageToVideoPipeline. Type: {type(pipe).__name__}")
-                # Attempt to proceed anyway, or raise error?
-                # raise TypeError(f"Model {model_key} is not the expected video pipeline type.")
+            # --- Determine Pipeline Type and Prepare Arguments --- #
+            pipe_args = {}
+            is_ltx_i2v = isinstance(pipe, LTXImageToVideoPipeline)
 
-            # 2. Load source image
-            source_image = load_image(source_image_path)
+            if is_ltx_i2v:
+                logger.info("Using LTXImageToVideoPipeline - Preparing specific arguments.")
+                # Load source image directly for LTX
+                source_image = load_image(source_image_path)
+                # --- Use default negative prompt if none provided --- #
+                provided_negative_prompt = kwargs.get("negative_prompt", "")
+                default_negative_prompt = "worst quality, inconsistent motion, blurry, jittery, distorted"
+                negative_prompt = provided_negative_prompt if provided_negative_prompt else default_negative_prompt
+                # --- End default negative prompt --- #
 
-            # 3. Apply preprocessing
-            # Resize first frame based on aspect ratio and model constraints
-            # Use a default max area, or allow override via kwargs?
-            max_area = kwargs.get("max_video_area", 720 * 1280)
-            processed_image, height, width = self._aspect_ratio_resize(source_image, pipe, max_area=max_area)
+                # Prepare arguments for LTX pipeline (based on reference)
+                pipe_args = {
+                    "image": source_image,
+                    "prompt": video_prompt,
+                    "negative_prompt": negative_prompt,
+                    "width": kwargs.get("width", 704), # Default from LTX reference
+                    "height": kwargs.get("height", 480), # Default from LTX reference
+                    "num_frames": kwargs.get("num_frames", 161), # Default from LTX reference
+                    "num_inference_steps": kwargs.get("num_inference_steps", 50), # Default from LTX reference
+                    "guidance_scale": kwargs.get("guidance_scale", 7.0) # LTX T2V used 7.0, use as default?
+                    # Add other relevant LTX pipeline args from kwargs if needed
+                }
+                print(f"   • LTX Parameters: Steps={pipe_args['num_inference_steps']}, Guidance={pipe_args['guidance_scale']}, Frames={pipe_args['num_frames']}, Size={pipe_args['width']}x{pipe_args['height']}")
+                if negative_prompt:
+                     print(f"   • Negative Prompt: {negative_prompt[:100]}" + ('... ' if len(negative_prompt) > 100 else ''))
 
-            # Note: The example code used a separate `last_frame`. For simplicity,
-            # we are currently only using the single source_image.
-            # If last_frame functionality is needed later, it would be loaded and processed here.
-            # e.g., last_frame = self._center_crop_resize(load_image(last_frame_path), height, width)
+            elif isinstance(pipe, WanImageToVideoPipeline):
+                logger.info("Using WanImageToVideoPipeline - Preparing specific arguments.")
+                # --- Existing Wan Preprocessing & Args --- #
+                guidance = kwargs.get("guidance_scale", 5.5)
+                fps = kwargs.get("fps", 16) # FPS used by Wan, not directly by LTX call?
+                print(f"   • Wan Parameters: Guidance={guidance}, FPS={fps}") # FPS is for export, not pipe call
 
-            # 4. Prepare arguments
-            pipe_args = {
-                "image": processed_image,
-                # "last_image": last_frame, # If using last frame
-                "prompt": video_prompt,
-                "height": height,
-                "width": width,
-                "guidance_scale": kwargs.get("guidance_scale", 5.5) # Use provided or default
-                # Add other relevant video pipeline args from kwargs if needed
-                # e.g., "num_inference_steps", "num_frames"
-            }
+                source_image = load_image(source_image_path)
+                max_area = kwargs.get("max_video_area", 720 * 1280) # Keep max_area for Wan
+                processed_image, height, width = self._aspect_ratio_resize(source_image, pipe, max_area=max_area)
 
-            # Filter out any kwargs not expected by the pipeline (optional)
-            # expected_args = set(inspect.signature(pipe.__call__).parameters.keys())
-            # filtered_args = {k: v for k, v in pipe_args.items() if k in expected_args}
+                pipe_args = {
+                    "image": processed_image,
+                    "prompt": video_prompt,
+                    "height": height,
+                    "width": width,
+                    "guidance_scale": guidance
+                    # Add other relevant Wan pipeline args from kwargs if needed
+                }
+                # --- End Wan Logic --- #
+
+            else:
+                # Unknown pipeline type
+                 logger.error(f"Loaded model {model_key} is an unexpected pipeline type: {type(pipe).__name__}")
+                 raise TypeError(f"Model {model_key} is not a supported I2V pipeline type.")
+            # --- End Argument Preparation --- #
+
+            sys.stdout.flush() # Flush logs before generation
 
             # Log generation start
-            print(f"\n🚀 Starting I2V generation with {model_key} (size: {width}x{height})")
+            print(f"\n🚀 Starting I2V generation with {model_key} ({type(pipe).__name__})")
             sys.stdout.flush()
 
             # 5. Call the pipeline
-            # Assuming the pipeline returns frames in `.frames[0]` based on example
-            output = pipe(**pipe_args).frames[0]
+            # Assuming both pipelines return frames in `.frames[0]`
+            output_frames = pipe(**pipe_args).frames[0]
 
-            print(f"✅ Successfully generated {len(output)} frames with model {model_key}")
+            # --- Added DEBUG: Inspect output_frames before returning --- #
+            # (Reusing the same debug block as T2V for consistency)
+            if output_frames is not None and hasattr(output_frames, '__len__') and len(output_frames) > 0:
+                first_frame = output_frames[0]
+                logger.debug(f"I2V generate_image_to_video: output_frames type: {type(output_frames)}")
+                logger.debug(f"I2V generate_image_to_video: first_frame type: {type(first_frame)}")
+                if isinstance(first_frame, torch.Tensor):
+                    logger.debug(f"I2V generate_image_to_video: first_frame tensor dtype: {first_frame.dtype}")
+                    logger.debug(f"I2V generate_image_to_video: first_frame tensor shape: {first_frame.shape}")
+                    if first_frame.dtype.is_floating_point:
+                        logger.debug(f"I2V generate_image_to_video: first_frame tensor min/max: {first_frame.min()}, {first_frame.max()}")
+                elif isinstance(first_frame, Image.Image):
+                    logger.debug(f"I2V generate_image_to_video: first_frame PIL mode: {first_frame.mode}")
+                    logger.debug(f"I2V generate_image_to_video: first_frame PIL size: {first_frame.size}")
+            else:
+                logger.debug("I2V generate_image_to_video: output_frames is None or empty.")
+            # --- End DEBUG --- #
+
+            print(f"✅ Successfully generated {len(output_frames)} frames with model {model_key}")
             sys.stdout.flush()
-            logger.info(f"Successfully generated {len(output)} frames with model {model_key}")
+            logger.info(f"Successfully generated {len(output_frames)} frames with model {model_key}")
 
-            # 6. Return frames (as PIL Images)
-            return output
+            # 6. Return frames (PIL Images or Tensors, depending on pipeline)
+            return output_frames
 
         except Exception as e:
             error_msg = f"Failed to generate I2V video with {model_key}: {str(e)}"

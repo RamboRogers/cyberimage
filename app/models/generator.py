@@ -391,6 +391,7 @@ class GenerationPipeline:
                             job["model_id"],
                             job["prompt"], # This is the video prompt for I2V
                             source_image_path,
+                            max_video_area=480*832, # Limit resolution like reference code
                             **core_settings # Pass filtered settings
                         )
 

@@ -1936,7 +1936,9 @@ function initializeGalleryItemActions() {
             const confirmed = confirm(`Are you sure you want to delete this ${mediaType}? This cannot be undone.`);
             if (confirmed) {
                 try {
-                    const response = await fetch(`/api/${mediaType}/${mediaId}`, { method: 'DELETE' });
+                    // ALWAYS use the /api/image endpoint for deletion, regardless of mediaType
+                    const deleteUrl = `/api/image/${mediaId}`;
+                    const response = await fetch(deleteUrl, { method: 'DELETE' });
                     if (response.ok) {
                         galleryItem.style.transition = 'opacity 0.5s ease, transform 0.5s ease';
                         galleryItem.style.opacity = '0';

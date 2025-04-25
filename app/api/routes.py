@@ -228,7 +228,7 @@ def generate_video():
         # Get optional settings and merge with defaults/required info
         settings = data.get("settings", {})
         settings["source_image_id"] = source_image_id
-        settings["type"] = "video" # Mark job type
+        settings["type"] = "i2v" # Mark job type correctly as Image-to-Video
         # Add default video settings if needed (e.g., fps)
         settings.setdefault("fps", 16)
         settings.setdefault("guidance_scale", 5.5) # Example default
@@ -243,11 +243,11 @@ def generate_video():
             "id": job_id,
             "model_id": video_model_id,
             "prompt": video_prompt, # Video prompt
-            "settings": settings # Includes source_image_id and type: video
+            "settings": settings # Includes source_image_id and type: i2v
         }
         g.generator.add_job(job_details)
 
-        logger.info(f"Added VIDEO job to queue: {job_id} (source: {source_image_id})")
+        logger.info(f"Added I2V job to queue: {job_id} (source: {source_image_id})")
 
         return jsonify({
             "job_id": job_id,
