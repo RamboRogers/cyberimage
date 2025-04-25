@@ -15,6 +15,10 @@ from app.models.manager import ModelManager
 from app.utils.queue import QueueManager
 from app.utils.image import ImageManager
 from app.utils.watchdog import GPUWatchdog
+from diffusers.utils import export_to_video
+import uuid
+from datetime import datetime
+import numpy as np
 
 class GenerationPipeline:
     """Handles the image generation process"""
@@ -121,8 +125,8 @@ class GenerationPipeline:
         self.watchdog = GPUWatchdog(
             model_manager=self.model_manager,
             app=self._app,
-            max_stalled_time=900,  # 15 minutes - increased to allow for longer generation times
-            check_interval=30,     # Check every 30 seconds
+            max_stalled_time=3600,  # 15 minutes - increased to allow for longer generation times
+            check_interval=60,     # Check every 30 seconds
             recovery_cooldown=300  # 5 minutes between recoveries
         )
         self.watchdog.start()
@@ -228,13 +232,41 @@ class GenerationPipeline:
         self.ensure_running()
 
         try:
-            # Update job status to processing
-            QueueManager.update_job_status(job["id"], "processing", "Initializing model...")
-            print(f"\n🎨 Starting image generation for job {job['id']}")
-            sys.stdout.flush()
+            # --- Get Job Type --- #
+            job_type = job.get("settings", {}).get("type", "image") # Default to image
+            job_id = job["id"]
+            model_id = job["model_id"]
 
-            # Extract metadata if available (for retry tracking)
-            metadata = job.get("metadata", {})
+            # Fetch model info for better logging
+            model_info = current_app.config.get("AVAILABLE_MODELS", {}).get(model_id, {})
+            model_description = model_info.get("description", "Unknown model")
+            model_type = model_info.get("type", "unknown")
+
+            # Update job status to processing
+            QueueManager.update_job_status(job_id, "processing", "Initializing...")
+
+            # Enhanced Job Logging
+            border = "=" * 50
+            print(f"\n{border}")
+            print(f"📝 PROCESSING JOB: {job_id}")
+            print(f"📝 MODEL: {model_id} - {model_description} (Type: {model_type})")
+            print(f"📝 JOB TYPE: {job_type.upper()}")
+
+            if "prompt" in job:
+                print(f"📝 PROMPT: {job['prompt'][:100]}" + ('...' if len(job['prompt']) > 100 else ''))
+            if "negative_prompt" in job and job["negative_prompt"]:
+                print(f"📝 NEGATIVE: {job['negative_prompt'][:100]}" + ('...' if len(job['negative_prompt']) > 100 else ''))
+
+            # Job specific details
+            if job_type == "i2v" and "source_image_id" in job.get("settings", {}):
+                print(f"📝 SOURCE IMAGE: {job['settings']['source_image_id']}")
+
+            print(f"{border}")
+            sys.stdout.flush()
+            # End Enhanced Job Logging
+
+            # --- Handle Retries --- #
+            metadata = job.get("settings", {})
             retry_count = metadata.get("retry_count", 0)
             original_job_id = metadata.get("original_job_id")
 
@@ -242,121 +274,255 @@ class GenerationPipeline:
                 print(f"   • Retry #{retry_count}" +
                       (f" of job {original_job_id}" if original_job_id else ""))
 
-            # Get number of images to generate
-            num_images = job["settings"].get("num_images", 1)
-            image_ids = []
+            # --- Filter Settings --- #
+            # Filter out admin-specific flags and job type that shouldn't be passed to the model
+            core_settings = {k: v for k, v in job.get("settings", {}).items()
+                             if k not in ["type", "admin_retried", "admin_retry_timestamp", "retry_count", "num_images", "source_image_id"]}
 
-            # Create settings without num_images to pass to generate_image
-            generation_settings = {k: v for k, v in job["settings"].items() if k != "num_images"}
-
-            # Filter out admin-specific flags that shouldn't be passed to the model
-            admin_flags = ["admin_retried", "admin_retry_timestamp", "retry_count"]
-            generation_settings = {k: v for k, v in generation_settings.items() if k not in admin_flags}
-
-            # Get the total inference steps for progress tracking
-            total_steps = generation_settings.get("num_inference_steps", 30)
-
-            # Acquire the generation lock - this ensures only one generation happens at a time
+            # --- Acquire Generation Lock --- #
             with self._generation_lock:
+                generated_media_ids = []
                 try:
-                    # Mark that generation is in progress to prevent other threads from starting generation
+                    # Mark that generation is in progress
                     GenerationPipeline._generation_in_progress = True
-
-                    # Force cleanup before we start, especially if we've had previous generations
-                    # --- Comment out initial cleanup to allow caching ---
-                    # self._force_memory_cleanup()
-                    # --- --- --- --- --- --- --- --- --- --- --- --- ---
-
-                    # Record which model we're about to use
                     GenerationPipeline._last_model_used = job["model_id"]
 
-                    for i in range(num_images):
-                        # Update status for generation
-                        QueueManager.update_job_status(
-                            job["id"],
-                            "processing",
-                            f"Generating image {i+1} of {num_images}..."
-                        )
+                    # --- Branch based on Job Type --- #
 
-                        # Load model and update status for each image individually
-                        QueueManager.update_job_status(job["id"], "processing", f"Loading model for image {i+1} of {num_images}...")
+                    # --- Text-to-Video (T2V) Generation --- #
+                    if job_type == "t2v":
+                        print(f"🎬 Starting Text-to-Video generation (T2V)")
+                        sys.stdout.flush()
+                        QueueManager.update_job_status(job_id, "processing", "Loading T2V model...")
 
-                        # Get the model - this will load it with CPU offloading
-                        model = self.model_manager.get_model(job["model_id"])
-
-                        # We've determined that SD3 Pipeline doesn't support callbacks,
-                        # so we'll use status updates only before and after generation
-                        QueueManager.update_job_status(
-                            job["id"],
-                            "processing",
-                            f"Running generation for image {i+1} of {num_images}..."
-                        )
-
-                        # Generate the image - one at a time
-                        image = self.model_manager.generate_image(
+                        # Generate video frames
+                        QueueManager.update_job_status(job_id, "processing", "Generating T2V frames...")
+                        frames = self.model_manager.generate_text_to_video(
                             job["model_id"],
                             job["prompt"],
-                            negative_prompt=job.get("negative_prompt"),
-                            **generation_settings  # Use the settings without num_images
+                            **core_settings
                         )
 
-                        # Prepare metadata for the image
-                        metadata = {
+                        # Check if frames generation failed or returned empty
+                        if frames is None or getattr(frames, 'size', 0) == 0:
+                            raise ValueError("T2V generation returned no frames or an empty result")
+
+                        # Save video
+                        QueueManager.update_job_status(job_id, "processing", "Saving T2V video...")
+                        fps = job["settings"].get("fps", 16)
+
+                        # --- Generate Path for Video --- #
+                        video_id = str(uuid.uuid4())
+                        today = datetime.utcnow().strftime("%Y/%m/%d")
+                        video_dir = os.path.join(current_app.config["IMAGES_PATH"], today)
+                        os.makedirs(video_dir, exist_ok=True)
+                        file_name = f"{video_id}.mp4"
+                        relative_video_path = os.path.join(today, file_name)
+                        output_video_path = os.path.join(video_dir, file_name)
+                        # --- End Path Generation --- #
+
+                        # --- DEBUG: Inspect frames before export ---
+                        if isinstance(frames, np.ndarray):
+                            print(f"DEBUG: Before export_to_video - frames.shape: {frames.shape}")
+                            print(f"DEBUG: Before export_to_video - frames.dtype: {frames.dtype}")
+                            print(f"DEBUG: Before export_to_video - frames.min(): {frames.min()}")
+                            print(f"DEBUG: Before export_to_video - frames.max(): {frames.max()}")
+                            # --- Fix shape/channel issues ---
+                            if frames.ndim == 5 and frames.shape[0] == 1:
+                                frames = frames[0]  # Now (F, H, W, C)
+                                print(f"DEBUG: Squeezed frames.shape -> {frames.shape}")
+                            # NOTE: Removed explicit scaling/casting. Trusting export_to_video.
+                        else:
+                            print(f"DEBUG: Before export_to_video - frames type is not ndarray: {type(frames)}")
+                        sys.stdout.flush()
+                        # --- End DEBUG ---
+
+                        export_to_video(frames, output_video_path, fps=fps)
+
+                        # Prepare metadata for video
+                        duration_seconds = len(frames) / fps
+                        video_metadata = {
                             "model_id": job["model_id"],
                             "prompt": job["prompt"],
-                            "negative_prompt": job.get("negative_prompt"),
-                            "settings": generation_settings,
+                            "settings": job["settings"], # Save all settings including type
                             "generation_time": time.time(),
-                            "image_number": i + 1,
-                            "total_images": num_images
+                            "fps": fps,
+                            "duration_seconds": duration_seconds,
+                            "frame_count": len(frames),
+                            "type": "video" # Use generic 'video' type for metadata
                         }
 
-                        # Save the image with metadata and job ID
-                        image_id = ImageManager.save_image(image, job["id"], metadata)
-                        image_ids.append(image_id)
-                        print(f"   • Saved image: {image_id}")
+                        # Save video record using the updated save_image method
+                        ImageManager.save_image(None, job_id, video_metadata, image_id=video_id, file_path=relative_video_path)
+                        generated_media_ids.append(video_id)
+                        print(f"✅ Saved T2V video: {video_id} with {len(frames)} frames")
                         sys.stdout.flush()
 
-                        # Force memory cleanup between images
-                        if i < num_images - 1:
-                            # Not the last image, so do cleanup before next generation
-                            # --- Comment out cleanup between images ---
-                            # self._force_memory_cleanup()
-                            # --- --- --- --- --- --- --- --- --- --- ---
-                            GenerationPipeline._generation_in_progress = True  # Re-mark as in progress
-                            GenerationPipeline._last_model_used = job["model_id"]  # Re-mark model
-                finally:
-                    # Always mark generation as complete, even if there's an error
-                    GenerationPipeline._generation_in_progress = False
+                    # --- Image-to-Video (I2V) Generation --- #
+                    elif job_type == "i2v": # Use the specific type from config/API
+                        print(f"🎬 Starting Image-to-Video generation (I2V)")
+                        sys.stdout.flush()
 
-                    # Always do cleanup after generation, even if there's an error
-                    # --- Comment out cleanup in finally block to allow caching ---
-                    # self._force_memory_cleanup()
-                    # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
-                    pass # Keep finally block structure
+                        source_image_id = job["settings"].get("source_image_id")
+                        if not source_image_id:
+                            raise ValueError("Missing source_image_id for I2V job")
+
+                        QueueManager.update_job_status(job_id, "processing", "Loading I2V model...")
+
+                        # Get source image path
+                        source_image_path = ImageManager.get_image_path(source_image_id)
+                        if not source_image_path:
+                            raise ValueError(f"I2V source image path not found for ID: {source_image_id}")
+
+                        # Generate video frames from image
+                        QueueManager.update_job_status(job_id, "processing", "Generating I2V frames...")
+                        frames = self.model_manager.generate_image_to_video(
+                            job["model_id"],
+                            job["prompt"], # This is the video prompt for I2V
+                            source_image_path,
+                            **core_settings # Pass filtered settings
+                        )
+
+                        # Check if frames generation failed or returned empty
+                        if frames is None or getattr(frames, 'size', 0) == 0:
+                             raise ValueError("I2V generation returned no frames or an empty result")
+
+                        # Save video
+                        QueueManager.update_job_status(job_id, "processing", "Saving I2V video...")
+                        fps = job["settings"].get("fps", 16)
+
+                        # --- Generate Path for Video --- #
+                        video_id = str(uuid.uuid4())
+                        today = datetime.utcnow().strftime("%Y/%m/%d")
+                        video_dir = os.path.join(current_app.config["IMAGES_PATH"], today)
+                        os.makedirs(video_dir, exist_ok=True)
+                        file_name = f"{video_id}.mp4"
+                        relative_video_path = os.path.join(today, file_name)
+                        output_video_path = os.path.join(video_dir, file_name)
+                        # --- End Path Generation --- #
+
+                        # --- DEBUG: Inspect frames before export ---
+                        if isinstance(frames, np.ndarray):
+                            print(f"DEBUG: Before export_to_video (I2V) - frames.shape: {frames.shape}")
+                            print(f"DEBUG: Before export_to_video (I2V) - frames.dtype: {frames.dtype}")
+                            print(f"DEBUG: Before export_to_video (I2V) - frames.min(): {frames.min()}")
+                            print(f"DEBUG: Before export_to_video (I2V) - frames.max(): {frames.max()}")
+                            # --- Fix shape/channel issues ---
+                            if frames.ndim == 5 and frames.shape[0] == 1:
+                                frames = frames[0]
+                                print(f"DEBUG: Squeezed frames.shape -> {frames.shape}")
+                            # NOTE: Removed explicit scaling/casting. Trusting export_to_video.
+                        else:
+                            print(f"DEBUG: Before export_to_video (I2V) - frames type is not ndarray: {type(frames)}")
+                        sys.stdout.flush()
+                        # --- End DEBUG ---
+
+                        export_to_video(frames, output_video_path, fps=fps)
+
+                        # Prepare metadata for video
+                        duration_seconds = len(frames) / fps
+                        video_metadata = {
+                            "model_id": job["model_id"],
+                            "prompt": job["prompt"],
+                            "settings": job["settings"], # Save all settings including type and source_id
+                            "generation_time": time.time(),
+                            "fps": fps,
+                            "duration_seconds": duration_seconds,
+                            "frame_count": len(frames),
+                            "type": "video" # Use generic 'video' type for metadata
+                        }
+
+                        # Save video record using the updated save_image method
+                        ImageManager.save_image(None, job_id, video_metadata, image_id=video_id, file_path=relative_video_path)
+                        generated_media_ids.append(video_id)
+                        print(f"✅ Saved I2V video: {video_id} with {len(frames)} frames")
+                        sys.stdout.flush()
+
+                    # --- Image Generation (Default/Existing) --- #
+                    # This implicitly handles job_type == "image" or if type is missing
+                    else:
+                        print(f"🖼️ Starting Image generation")
+                        sys.stdout.flush()
+
+                        num_images = job["settings"].get("num_images", 1)
+
+                        for i in range(num_images):
+                            print(f"   ▷ Generating image {i+1}/{num_images} (Job: {job_id})")
+                            sys.stdout.flush()
+
+                            QueueManager.update_job_status(job_id, "processing", f"Loading model for image {i+1}/{num_images}...")
+
+                            # Generate the image
+                            QueueManager.update_job_status(job_id, "processing", f"Generating image {i+1}/{num_images}...")
+                            image = self.model_manager.generate_image(
+                                job["model_id"],
+                                job["prompt"],
+                                negative_prompt=job.get("negative_prompt"),
+                                **core_settings
+                            )
+
+                            # Prepare metadata for the image
+                            image_metadata = {
+                                "model_id": job["model_id"],
+                                "prompt": job["prompt"],
+                                "negative_prompt": job.get("negative_prompt"),
+                                "settings": job["settings"], # Save all original settings
+                                "generation_time": time.time(),
+                                "image_number": i + 1,
+                                "total_images": num_images,
+                                "type": "image" # Explicitly store type
+                            }
+
+                            # Save the image with metadata and job ID
+                            image_id = ImageManager.save_image(image, job_id, image_metadata)
+                            generated_media_ids.append(image_id)
+                            print(f"   ✅ Saved image: {image_id} (Image {i+1}/{num_images})")
+                            sys.stdout.flush()
+
+                finally:
+                    # Always mark generation as complete
+                    GenerationPipeline._generation_in_progress = False
+                    # Keep model potentially cached
+                    pass
 
             # Update job status to completed
+            # Store the list of generated image/video IDs in the job record
+            # Determine the correct media type string for the completion message
+            final_media_type = "image" # Default
+            if job_type == "t2v" or job_type == "i2v":
+                 final_media_type = "video"
+
+            completion_message = f"Generated {len(generated_media_ids)} {final_media_type}(s)"
             QueueManager.update_job_status(
-                job["id"],
+                job_id,
                 "completed",
-                f"Generated {len(image_ids)} image(s)",
-                image_ids=image_ids
+                completion_message,
+                image_ids=generated_media_ids # Changed from media_ids to image_ids to match API
             )
 
-            print(f"✅ Job {job['id']} completed")
+            print(f"✅ JOB COMPLETED: {job_id} - Generated {len(generated_media_ids)} {final_media_type}(s)")
             sys.stdout.flush()
 
-            # Return the first image ID
-            return image_ids[0] if image_ids else None
+            # Return the first generated ID
+            return generated_media_ids[0] if generated_media_ids else None
 
         except Exception as e:
             # Handle generation errors
-            error_message = f"Error generating image: {str(e)}"
+            job_id = job.get("id", "unknown")
+            exception_type = type(e).__name__
+            error_message = f"Error processing job {job_id} ({job_type}): {str(e)}"
+
+            # --- Enhanced Error Logging --- #
             print(f"\n❌ {error_message}")
+            print(f"   • Exception Type: {exception_type}")
+            # Ensure message is flushed *before* potential exit
             sys.stdout.flush()
+            # Also log to logger for persistence
+            current_app.logger.error(f"Failed job {job_id}: {error_message}", exc_info=True)
+            # --- End Enhanced Logging --- #
 
             # Update job status to failed
-            QueueManager.update_job_status(job["id"], "failed", error_message)
+            QueueManager.update_job_status(job_id, "failed", error_message)
 
             # Make sure generation is marked as not in progress
             GenerationPipeline._generation_in_progress = False
@@ -364,13 +530,19 @@ class GenerationPipeline:
             # Force memory cleanup on error
             self._force_memory_cleanup()
 
-            # Terminate the application with an error code
-            # This will allow Docker to restart the container with a clean state
-            print(f"\n🚨 Critical failure in image generation. Terminating process to allow container restart.")
-            sys.stdout.flush()
-
-            # Use os._exit for immediate termination without cleanup
-            os._exit(1)
+            # Terminate the application if it's a critical model/generation error
+            # Avoid terminating for recoverable errors like missing source image
+            if isinstance(e, (ValueError, FileNotFoundError)):
+                 print(f"   • Recoverable error, continuing queue processing.")
+                 sys.stdout.flush() # Flush this message too
+            else:
+                # --- Log Termination --- #
+                termination_message = f"\n🚨 Critical failure ({exception_type}) in generation for job {job_id}. Terminating process."
+                print(termination_message)
+                current_app.logger.critical(termination_message)
+                sys.stdout.flush()
+                # --- End Log Termination --- #
+                os._exit(1) # Immediate termination
 
             return None
 

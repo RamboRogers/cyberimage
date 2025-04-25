@@ -1881,3 +1881,122 @@ footer .branding a:hover::after {
         gap: 0.5rem;
     }
 }
+
+/* --- Video Generation Modal --- */
+.video-gen-modal .modal-content {
+    max-width: 700px;
+}
+
+.video-gen-modal .modal-body {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+}
+
+.video-gen-preview {
+    display: flex;
+    gap: 1rem;
+    align-items: flex-start;
+    background: var(--panel-bg);
+    padding: 1rem;
+    border-radius: var(--border-radius);
+    border: 1px solid var(--neon-green-dim);
+}
+
+.video-gen-preview img {
+    width: 150px;
+    height: 150px;
+    object-fit: cover;
+    border-radius: var(--border-radius);
+    border: 1px solid var(--neon-green-dim);
+    flex-shrink: 0;
+}
+
+.source-prompt-display {
+    flex: 1;
+    min-width: 0;
+}
+
+.source-prompt-display h3 {
+    color: var(--neon-green);
+    font-size: 0.9rem;
+    margin-bottom: 0.5rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.source-prompt-display pre {
+    background: var(--input-bg);
+    padding: 0.75rem;
+    border-radius: var(--border-radius);
+    font-size: 0.85rem;
+    line-height: 1.5;
+    max-height: 100px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    color: rgba(255, 255, 255, 0.8);
+}
+
+#video-generate-form .input-group {
+    margin-bottom: 0.5rem;
+}
+
+#video-generate-form label {
+    color: var(--neon-green);
+    margin-bottom: 0.25rem;
+    font-size: 0.9rem;
+}
+
+#videoGenModelSelect {
+    width: 100%;
+}
+
+.video-gen-modal .modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 1rem;
+    margin-top: 1rem;
+}
+
+.button-cancel {
+    background: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.5);
+    color: rgba(255, 255, 255, 0.8);
+}
+
+.button-cancel:hover {
+    border-color: var(--text-color);
+    color: var(--text-color);
+    background: rgba(255, 255, 255, 0.1);
+}
+
+/* --- End Video Generation Modal --- */
+
+/* --- Gallery Video Item Indicator --- */
+.gallery-item-video .item-preview::after {
+    content: '\f04b'; /* Font Awesome Play Icon */
+    font-family: 'Font Awesome 6 Free';
+    font-weight: 900;
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 3rem;
+    color: rgba(255, 255, 255, 0.7);
+    background-color: rgba(0, 0, 0, 0.4);
+    border-radius: 50%;
+    width: 60px;
+    height: 60px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none; /* Allow clicks to pass through */
+    opacity: 0;
+    transition: opacity 0.3s ease;
+}
+
+.gallery-item-video:hover .item-preview::after {
+    opacity: 1;
+}
+/* --- End Gallery Video Item Indicator --- */

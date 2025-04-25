@@ -13,7 +13,9 @@ if (typeof window.API === 'undefined') {
         FAVORITE: (imageId) => `/api/favorite/${imageId}`,
         TAGS: '/api/tags',
         ADD_TAG: (imageId, tag) => `/api/image/${imageId}/tag/${encodeURIComponent(tag)}`,
-        REMOVE_TAG: (imageId, tag) => `/api/image/${imageId}/tag/${encodeURIComponent(tag)}`
+        REMOVE_TAG: (imageId, tag) => `/api/image/${imageId}/tag/${encodeURIComponent(tag)}`,
+        VIDEO_GEN: '/api/generate_video',
+        GET_VIDEO: (videoId) => `/api/get_video/${videoId}`,
     };
 }
 
@@ -149,21 +151,49 @@ const Utilities = {
      * @returns {Promise<boolean>} Success status
      */
     async copyToClipboard(text) {
+        if (!text) return false;
+
         try {
-            await navigator.clipboard.writeText(text);
-            return true;
-        } catch (error) {
-            console.error('Failed to copy: ', error);
-            // Fallback method
+            // Method 1: Clipboard API (modern browsers)
+            if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+                try {
+                    await navigator.clipboard.writeText(text);
+                    return true;
+                } catch (clipboardErr) {
+                    console.error('Clipboard API failed:', clipboardErr);
+                    // Fall through to fallback
+                }
+            }
+
+            // Method 2: execCommand fallback (older browsers)
             const textarea = document.createElement('textarea');
             textarea.value = text;
             textarea.style.position = 'fixed';
+            textarea.style.left = '0';
+            textarea.style.top = '0';
+            textarea.style.opacity = '0';
             document.body.appendChild(textarea);
             textarea.focus();
             textarea.select();
-            const successful = document.execCommand('copy');
-            document.body.removeChild(textarea);
-            return successful;
+
+            try {
+                const success = document.execCommand('copy');
+                if (success) {
+                    return true;
+                }
+            } catch (execErr) {
+                console.error('execCommand fallback failed:', execErr);
+            } finally {
+                document.body.removeChild(textarea);
+            }
+
+            // Method 3: Manual copy (last resort)
+            console.log('All clipboard methods failed, showing manual copy dialog');
+            alert(`Please copy this text manually: ${text}`);
+            return false;
+        } catch (error) {
+            console.error('Copy operation completely failed:', error);
+            return false;
         }
     },
 
@@ -525,7 +555,8 @@ class SelectionManager {
      * @param {HTMLElement} item - Gallery item to select
      */
     selectItem(item) {
-        const imageId = item.dataset.imageId;
+        // Support both data attributes for backwards compatibility
+        const imageId = item.dataset.imageId || item.dataset.mediaId;
         if (!imageId) return;
 
         item.classList.add('selected');
@@ -538,7 +569,8 @@ class SelectionManager {
      * @param {HTMLElement} item - Gallery item to deselect
      */
     deselectItem(item) {
-        const imageId = item.dataset.imageId;
+        // Support both data attributes for backwards compatibility
+        const imageId = item.dataset.imageId || item.dataset.mediaId;
         if (!imageId) return;
 
         item.classList.remove('selected');
@@ -552,7 +584,8 @@ class SelectionManager {
      * @returns {boolean} Whether the item is selected
      */
     isSelected(item) {
-        const imageId = item.dataset.imageId;
+        // Support both data attributes for backwards compatibility
+        const imageId = item.dataset.imageId || item.dataset.mediaId;
         return imageId ? this.selectedItems.has(imageId) : false;
     }
 
@@ -790,9 +823,12 @@ class SelectionManager {
 class ModalManager {
     constructor() {
         this.modal = document.getElementById('fullscreenModal');
+        this.modalContent = this.modal.querySelector('.fullscreen-content');
         this.currentImageId = null;
         this.isOpen = false;
         this.modalImage = document.getElementById('modalImage');
+        this.modalVideoContainer = this.modal.querySelector('.fullscreen-image');
+        this.modalVideo = null;
         this.modelInfo = document.getElementById('modelInfo');
         this.promptInfo = document.getElementById('promptInfo');
         this.settingsInfo = document.getElementById('settingsInfo');
@@ -829,9 +865,32 @@ class ModalManager {
         });
 
         // Button handlers
-        this.copyPromptBtn.addEventListener('click', () => this.copyPrompt());
-        this.downloadBtn.addEventListener('click', () => this.downloadCurrentImage());
-        this.deleteBtn.addEventListener('click', () => this.deleteCurrentImage());
+        if (this.copyPromptBtn) {
+            this.copyPromptBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                this.copyPrompt();
+            });
+        }
+
+        if (this.downloadBtn) {
+            this.downloadBtn.addEventListener('click', () => this.downloadCurrentImage());
+        }
+
+        if (this.deleteBtn) {
+            this.deleteBtn.addEventListener('click', () => this.deleteCurrentImage());
+        }
+    }
+
+    /**
+     * Hide the modal
+     */
+    hide() {
+        if (this.modal) {
+            this.modal.style.display = 'none';
+            document.body.style.overflow = '';
+            this.isOpen = false;
+            this.currentImageId = null;
+        }
     }
 
     /**
@@ -840,167 +899,52 @@ class ModalManager {
      */
     show(imageElement) {
         const galleryItem = imageElement.closest('.gallery-item');
-        this.currentImageId = galleryItem.dataset.imageId;
+        if (!galleryItem) return;
+
+        // Support both data-media-id (newer) and data-image-id (older gallery items)
+        this.currentImageId = galleryItem.dataset.mediaId || galleryItem.dataset.imageId;
+        if (!this.currentImageId) {
+            console.error("No image ID found on gallery item:", galleryItem);
+            return;
+        }
+
+        const isVideo = galleryItem.classList.contains('gallery-item-video');
+
+        // Store reference for navigation
+        this.modalContent.dataset.currentImageId = this.currentImageId;
+        this.modalContent.dataset.isVideo = isVideo;
+
+        // Hide/show image/video elements
+        this.modalImage.style.display = isVideo ? 'none' : 'block';
+        if (this.modalVideo) this.modalVideo.style.display = isVideo ? 'block' : 'none';
 
         // Set image source
-        this.modalImage.src = imageElement.src || imageElement.dataset.src;
+        if (isVideo) {
+            // Create video element if it doesn't exist
+            if (!this.modalVideo) {
+                this.modalVideo = document.createElement('video');
+                this.modalVideo.id = 'modalVideo';
+                this.modalVideo.controls = true;
+                this.modalVideo.style.maxWidth = '100%';
+                this.modalVideo.style.maxHeight = '70vh';
+                this.modalVideo.style.display = 'none'; // Initially hidden
+                this.modalVideoContainer.appendChild(this.modalVideo);
+            }
+            this.modalVideo.src = window.API.GET_VIDEO(this.currentImageId);
+            this.modalVideo.style.display = 'block';
+            this.modalImage.style.display = 'none';
+        } else {
+            this.modalImage.src = imageElement.src || imageElement.dataset.src;
+            this.modalImage.style.display = 'block';
+        }
+
+        // Make sure modal is visible
         this.modal.style.display = 'flex';
         document.body.style.overflow = 'hidden';
         this.isOpen = true;
 
-        // Store reference for navigation
-        this.modal.querySelector('.fullscreen-content').dataset.currentImageId = this.currentImageId;
-
-        // Reset info sections
-        this.modelInfo.textContent = 'Loading...';
-        this.promptInfo.textContent = 'Loading...';
-        this.settingsInfo.textContent = 'Loading...';
-
-        // Fetch image metadata
-        this.loadImageDetails(this.currentImageId);
-
-        // Preload adjacent images for smoother navigation
-        this.preloadAdjacentImages();
-    }
-
-    /**
-     * Hide the modal
-     */
-    hide() {
-        this.modal.style.display = 'none';
-        document.body.style.overflow = '';
-        this.isOpen = false;
-        this.currentImageId = null;
-    }
-
-    /**
-     * Load image details into the modal
-     * @param {string} imageId - ID of image to load details for
-     */
-    async loadImageDetails(imageId) {
-        try {
-            const response = await fetch(window.API.METADATA(imageId));
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-
-            const data = await response.json();
-
-            this.modelInfo.textContent = data.model_id || 'Not available';
-            this.promptInfo.textContent = data.prompt || 'Not available';
-
-            // Format settings as a readable string
-            const settings = Object.entries(data.settings || {})
-                .map(([key, value]) => `${key}: ${value}`)
-                .join('\n');
-            this.settingsInfo.textContent = settings || 'Not available';
-
-            // Update any tags or additional metadata
-            if (data.tags) {
-                const tagsContainer = document.createElement('div');
-                tagsContainer.className = 'image-tags';
-
-                data.tags.forEach(tag => {
-                    const tagElement = document.createElement('span');
-                    tagElement.className = 'image-tag';
-                    tagElement.textContent = tag;
-                    tagsContainer.appendChild(tagElement);
-                });
-
-                // Append to the appropriate section
-                const tagsSection = document.querySelector('.tags-section');
-                if (tagsSection) {
-                    tagsSection.innerHTML = '';
-                    tagsSection.appendChild(tagsContainer);
-                }
-            }
-        } catch (error) {
-            console.error('Error fetching image metadata:', error);
-            this.modelInfo.textContent = 'Error loading details';
-            this.promptInfo.textContent = 'Error loading details';
-            this.settingsInfo.textContent = 'Error loading details';
-        }
-    }
-
-    /**
-     * Navigate to the next image
-     */
-    nextImage() {
-        const currentItem = document.querySelector(`[data-image-id="${this.currentImageId}"]`);
-        if (!currentItem) return;
-
-        const nextItem = currentItem.nextElementSibling;
-        if (nextItem && nextItem.classList.contains('gallery-item')) {
-            const img = nextItem.querySelector('img');
-            if (img) this.show(img);
-        }
-    }
-
-    /**
-     * Navigate to the previous image
-     */
-    prevImage() {
-        const currentItem = document.querySelector(`[data-image-id="${this.currentImageId}"]`);
-        if (!currentItem) return;
-
-        const prevItem = currentItem.previousElementSibling;
-        if (prevItem && prevItem.classList.contains('gallery-item')) {
-            const img = prevItem.querySelector('img');
-            if (img) this.show(img);
-        }
-    }
-
-    /**
-     * Preload adjacent images for smoother navigation
-     */
-    preloadAdjacentImages() {
-        const currentItem = document.querySelector(`[data-image-id="${this.currentImageId}"]`);
-        if (!currentItem) return;
-
-        // Preload next image
-        const nextItem = currentItem.nextElementSibling;
-        if (nextItem && nextItem.classList.contains('gallery-item')) {
-            const nextImg = nextItem.querySelector('img');
-            if (nextImg && nextImg.dataset.src) {
-                const preloadNext = new Image();
-                preloadNext.src = nextImg.dataset.src;
-            }
-        }
-
-        // Preload previous image
-        const prevItem = currentItem.previousElementSibling;
-        if (prevItem && prevItem.classList.contains('gallery-item')) {
-            const prevImg = prevItem.querySelector('img');
-            if (prevImg && prevImg.dataset.src) {
-                const preloadPrev = new Image();
-                preloadPrev.src = prevImg.dataset.src;
-            }
-        }
-    }
-
-    /**
-     * Copy the prompt text to clipboard
-     */
-    async copyPrompt() {
-        const promptText = this.promptInfo.textContent;
-        if (!promptText || promptText === 'Loading...' || promptText === 'Error loading details') {
-            return;
-        }
-
-        const success = await Utilities.copyToClipboard(promptText);
-
-        if (success) {
-            // Update button temporarily to show success
-            const originalText = this.copyPromptBtn.innerHTML;
-            this.copyPromptBtn.innerHTML = '<span class="icon">✓</span>Copied!';
-            setTimeout(() => {
-                this.copyPromptBtn.innerHTML = originalText;
-            }, 2000);
-
-            Utilities.showFeedback('Prompt copied to clipboard!', 'success');
-        } else {
-            Utilities.showFeedback('Failed to copy prompt', 'error');
-        }
+        // Fetch and display metadata
+        this.fetchImageMetadata(this.currentImageId);
     }
 
     /**
@@ -1077,8 +1021,9 @@ class ModalManager {
                     const data = await response.json();
 
                     if (data.status === 'success') {
-                        // Remove the image from gallery
-                        const galleryItem = document.querySelector(`[data-image-id="${this.currentImageId}"]`);
+                        // Remove the image from gallery - support both attribute types
+                        const galleryItem = document.querySelector(`[data-image-id="${this.currentImageId}"]`) ||
+                                          document.querySelector(`[data-media-id="${this.currentImageId}"]`);
                         if (galleryItem) {
                             galleryItem.remove();
                         }
@@ -1109,6 +1054,119 @@ class ModalManager {
                     deleteConfirmModal.style.display = 'none';
                 }
             });
+        }
+    }
+
+    /**
+     * Copy the current prompt to clipboard
+     */
+    async copyPrompt() {
+        if (!this.currentImageId || !this.promptInfo) return;
+
+        // Get prompt text from the element
+        const promptText = this.promptInfo.textContent;
+        if (!promptText || promptText === 'Loading...' || promptText === 'Metadata unavailable') {
+            Utilities.showFeedback('No prompt available to copy', 'error');
+            return;
+        }
+
+        try {
+            // Visual feedback
+            const originalButtonHtml = this.copyPromptBtn.innerHTML;
+            this.copyPromptBtn.innerHTML = '<span class="icon">⏳</span> Copying...';
+
+            // Try to copy
+            const success = await Utilities.copyToClipboard(promptText);
+
+            if (success) {
+                this.copyPromptBtn.innerHTML = '<span class="icon">✓</span> Copied!';
+                Utilities.showFeedback('Prompt copied to clipboard!', 'success');
+            } else {
+                this.copyPromptBtn.innerHTML = '<span class="icon">❌</span> Failed';
+                Utilities.showFeedback('Failed to copy prompt automatically. Try selecting and copying manually.', 'warning');
+
+                // Make the text selectable and bring attention to it
+                this.promptInfo.style.userSelect = 'text';
+                this.promptInfo.style.webkitUserSelect = 'text';
+                this.promptInfo.style.backgroundColor = 'rgba(255, 255, 255, 0.1)';
+                this.promptInfo.focus();
+            }
+
+            // Reset button after delay
+            setTimeout(() => {
+                this.copyPromptBtn.innerHTML = originalButtonHtml;
+                // Reset highlighting after a delay
+                setTimeout(() => {
+                    this.promptInfo.style.backgroundColor = '';
+                }, 3000);
+            }, 2000);
+
+        } catch (error) {
+            console.error('Error in modal copyPrompt:', error);
+            this.copyPromptBtn.innerHTML = '<span class="icon">❌</span> Error';
+
+            // Reset button after delay
+            setTimeout(() => {
+                this.copyPromptBtn.innerHTML = '<span class="icon">📋</span> Copy Prompt';
+            }, 2000);
+
+            Utilities.showFeedback(`Failed to copy: ${error.message}`, 'error');
+        }
+    }
+
+    /**
+     * Fetch and display image metadata
+     * @param {string} imageId - ID of the image to fetch metadata for
+     */
+    async fetchImageMetadata(imageId) {
+        // Reset metadata fields
+        if (this.modelInfo) this.modelInfo.textContent = 'Loading...';
+        if (this.promptInfo) this.promptInfo.textContent = 'Loading...';
+        if (this.settingsInfo) this.settingsInfo.textContent = 'Loading...';
+
+        try {
+            const response = await fetch(window.API.METADATA(imageId));
+
+            if (!response.ok) {
+                throw new Error(`Failed to fetch metadata (${response.status})`);
+            }
+
+            const data = await response.json();
+
+            // Update modal with metadata
+            if (this.modelInfo) {
+                this.modelInfo.textContent = data.model_id || 'Not available';
+            }
+
+            if (this.promptInfo) {
+                this.promptInfo.textContent = data.prompt ||
+                                             data.settings?.prompt ||
+                                             'Not available';
+            }
+
+            if (this.settingsInfo && data.settings) {
+                try {
+                    // Format settings nicely
+                    const settings = Object.entries(data.settings || {})
+                        .filter(([key]) => key !== 'prompt') // Skip prompt as it's shown separately
+                        .map(([key, value]) => `${key}: ${JSON.stringify(value)}`)
+                        .join('\n');
+
+                    this.settingsInfo.textContent = settings || 'No additional settings';
+                } catch (formatError) {
+                    console.error('Error formatting settings:', formatError);
+                    this.settingsInfo.textContent = 'Error formatting settings';
+                }
+            }
+        } catch (error) {
+            console.error('Error fetching image metadata:', error);
+
+            // Set error messages in modal
+            if (this.modelInfo) this.modelInfo.textContent = 'Metadata unavailable';
+            if (this.promptInfo) this.promptInfo.textContent = 'Metadata unavailable';
+            if (this.settingsInfo) this.settingsInfo.textContent = 'Metadata unavailable';
+
+            Utilities.showFeedback(`Failed to load image details: ${error.message}`, 'error');
         }
     }
 }
@@ -1557,7 +1615,10 @@ class GalleryManager {
     createImageElement(image) {
         const div = document.createElement('div');
         div.className = 'gallery-item';
-        div.dataset.imageId = image.id;
+
+        // Add both attributes for compatibility
+        div.dataset.imageId = image.id; // Original attribute
+        div.dataset.mediaId = image.id; // New attribute for compatibility
 
         // Handle potential missing data gracefully
         const prompt = image.prompt || 'No prompt available';
@@ -2027,32 +2088,60 @@ class GalleryManager {
      */
     async copyPrompt(imageId, button) {
         try {
+            // Visual feedback - start
+            if (button) {
+                const originalText = button.textContent;
+                button.textContent = '⏳';
+                button.classList.add('copying');
+            }
+
+            // Fetch the metadata with proper error handling
             const response = await fetch(window.API.METADATA(imageId));
-            if (!response.ok) throw new Error('Failed to fetch prompt');
+
+            if (!response.ok) {
+                throw new Error(`Failed to fetch prompt (${response.status})`);
+            }
 
             const data = await response.json();
-            if (!data.prompt) throw new Error('No prompt available');
+            const promptText = data.prompt;
 
-            const success = await Utilities.copyToClipboard(data.prompt);
+            if (!promptText) {
+                throw new Error('No prompt available in metadata');
+            }
+
+            // Try to copy the text
+            const success = await Utilities.copyToClipboard(promptText);
 
             if (success) {
-                // Visual feedback on the button
-                const originalText = button.textContent;
-                button.textContent = '✓';
-                button.classList.add('active');
-
-                setTimeout(() => {
-                    button.textContent = originalText;
-                    button.classList.remove('active');
-                }, 1000);
-
+                // Success feedback
+                if (button) {
+                    button.textContent = '✓';
+                    button.classList.add('active');
+                    button.classList.remove('copying');
+                    setTimeout(() => {
+                        button.textContent = '📋';
+                        button.classList.remove('active');
+                    }, 1500);
+                }
                 Utilities.showFeedback('Prompt copied to clipboard!', 'success');
             } else {
                 throw new Error('Copy operation failed');
             }
         } catch (error) {
             console.error('Error copying prompt:', error);
-            Utilities.showFeedback('Failed to copy prompt', 'error');
+
+            // Error feedback
+            if (button) {
+                button.textContent = '❌';
+                button.classList.remove('copying');
+                button.classList.add('error');
+                setTimeout(() => {
+                    button.textContent = '📋';
+                    button.classList.remove('error');
+                }, 1500);
+            }
+
+            Utilities.showFeedback(`Failed to copy prompt: ${error.message}`, 'error');
         }
     }
 
@@ -2083,10 +2172,14 @@ class GalleryManager {
     }
 
     /**
-     * Delete an image
+     * Delete an image with confirmation dialog
      * @param {string} imageId - ID of image to delete
      */
     deleteImage(imageId) {
+        // Get element for both potential attribute names
+        const galleryItem = document.querySelector(`[data-image-id="${imageId}"]`) ||
+                           document.querySelector(`[data-media-id="${imageId}"]`);
+
         // Reuse the deleteCurrentImage method from ModalManager
         this.modalManager.currentImageId = imageId;
         this.modalManager.deleteCurrentImage();

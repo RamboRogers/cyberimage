@@ -1,19 +1,24 @@
 # CyberImage Project Notes
 
 ## Project State
-- Initial setup phase
-- Planning core architecture
+- Integrating distinct Text-to-Video and Image-to-Video generation capabilities.
+- Added `/generate_t2v` endpoint.
+- Clarified `/generate_video` endpoint for Image-to-Video.
 
 ## Core Components Tracking
 ### Storage Structure
 - /images - Local image storage
 - /db - SQLite database storage
+- /videos - Local video storage (Implicitly handled by ImageManager for now)
 
 ### API Endpoints (REST)
-- POST /api/generate - Submit generation request
-- GET /api/status/{job_id} - Check job status
+- POST /api/generate - Submit Text-to-Image generation request
+- POST /api/generate_t2v - Submit Text-to-Video generation request (New)
+- POST /api/generate_video - Submit Image-to-Video generation request (Previously just "Video")
+- GET /api/status/{job_id} - Check job status (handles image, t2v, i2v jobs)
 - GET /api/image/{image_id} - Retrieve generated image
-- GET /api/models - List available models
+- GET /api/video/{video_id} - Retrieve generated video (New/Refined)
+- GET /api/models - List available models (incl. video types)
 - GET /api/queue - View current queue status
 
 ### Database Schema
@@ -23,88 +28,174 @@ CREATE TABLE jobs (
     id TEXT PRIMARY KEY,
     status TEXT,  -- PENDING, PROCESSING, COMPLETED, FAILED
     model TEXT,
-    prompt TEXT,
+    prompt TEXT,  -- Main prompt (text for T2I/T2V, video prompt for I2V)
     created_at TIMESTAMP,
     completed_at TIMESTAMP,
-    image_path TEXT,
-    settings JSON
+    media_path TEXT, -- Renamed from image_path to handle both
+    settings JSON -- Includes type ('image', 't2v', 'i2v'), source_image_id for i2v, etc.
 );
 ```
+#### Images/Media Table
+```sql
+CREATE TABLE images ( -- May need renaming to 'media' eventually
+    id TEXT PRIMARY KEY,
+    job_id TEXT,
+    file_path TEXT,
+    created_at TIMESTAMP,
+    metadata JSON, -- includes original settings, prompt, model, potentially media type ('image', 'video')
+    FOREIGN KEY(job_id) REFERENCES jobs(id)
+);
+```
+*(Note: DB Schema updates are proposed, need implementation)*
 
 ### Models Integration
 Available Models:
-1. FLUX.1-dev (black-forest-labs/FLUX.1-dev)
-2. SD 3.5 Large (stabilityai/stable-diffusion-3.5-large)
-3. Flux.1dev Abliterated (aoxo/flux.1dev-abliteratedv2)
+1. FLUX.1-dev (black-forest-labs/FLUX.1-dev) - Image
+2. SD 3.5 Large (stabilityai/stable-diffusion-3.5-large) - Image
+3. Flux.1dev Abliterated (aoxo/flux.1dev-abliteratedv2) - Image
+4. wan-t2v (e.g., `wan-t2v` from .env) - Text-to-Video (T2V)
+5. Wan-AI/Wan2.1-I2V-14B-480P (e.g., `MODEL_I2V` from .env) - Image-to-Video (I2V)
+
+*(Note: Actual IDs and how they are parsed from .env need confirmation in `app/models/__init__.py`)*
 
 #### Proposed .env Format Update (Model Configuration)
-Current Format: `MODEL_NAME=<name>;<repo>;<description>;<source>;<requires_auth>`
-Proposed Format: `MODEL_NAME=<name>;<repo>;<description>;<source>;<requires_auth>[;<options_json>]`
-
-The `<options_json>` is an optional JSON string to specify model-specific behaviors, such as step configurations.
-
-Examples:
-- **Fixed Steps:** `MODEL_X="fixed-step-model;some/repo;Fixed Step Model;huggingface;false;{\\"fixed_steps\\": 25}"`
-- **Step Range:** `MODEL_Y="range-step-model;another/repo;Range Step Model;huggingface;false;{\\"steps\\": {\\"min\\": 10, \\"max\\": 40, \\"default\\": 20}}"`
-- **Use Case:** `MODEL_SANA="sana-sprint;Efficient-Large-Model/Sana_Sprint_1.6B_1024px_diffusers;Sana Sprint 1.6B;huggingface;false;{\\"fixed_steps\\": 2}"`
-
-*Backend changes needed to parse this and update the `/api/models` endpoint.*
+(Existing proposal remains relevant, may need a 'type' field if not inferred from repo)
 
 ### Core Functions
 ```python
-def generate_image(prompt: str, model_id: str) -> str:
-    """Generate image and return job_id"""
+# Existing
+def generate_image(prompt: str, model_id: str, settings: dict) -> str:
+    \"\"\"Generate image and return job_id\"\"\"
 
 def get_job_status(job_id: str) -> dict:
-    """Get status of generation job"""
+    \"\"\"Get status of generation job (image or video)\"\"\"
 
 def get_image(image_id: str) -> str:
-    """Get path to generated image"""
+    \"\"\"Get path to generated image\"\"\"
 
 def process_queue() -> None:
-    """Process pending generation jobs"""
+    \"\"\"Process pending generation jobs (image or video)\"\"\"
+
+# New/Updated
+def generate_t2v(prompt: str, model_id: str, settings: dict) -> str:
+    \"\"\"Generate text-to-video and return job_id\"\"\"
+
+def generate_i2v(source_image_id: str, video_prompt: str, model_id: str, settings: dict) -> str:
+    \"\"\"Generate image-to-video and return job_id\"\"\"
+
+def get_video(video_id: str) -> str:
+    \"\"\"Get path to generated video\"\"\"
+
+# Backend API Handlers (app/api/routes.py)
+def generate_image(): # Handles POST /api/generate
+    pass
+def generate_t2v(): # Handles POST /api/generate_t2v (New)
+    pass
+def generate_video(): # Handles POST /api/generate_video (Now specifically I2V)
+    pass
+def get_job_status(job_id): # Handles GET /api/status/{job_id}
+    pass
+def get_image(image_id): # Handles GET /api/image/{image_id}
+    pass
+def get_video(video_id): # Handles GET /api/video/{video_id} (New/Refined)
+    pass
+def get_models(): # Handles GET /api/models
+    pass
+def get_queue(): # Handles GET /api/queue
+    pass
+# ... other handlers ...
 ```
 
 ## Frontend Enhancements (main.js)
-
-### Completed: User Settings Persistence
-- **Goal:** Remember user's last selected Model and Steps value between sessions.
-- **Implementation:** Used `localStorage` in `app/static/js/main.js`.
-    - On page load (`DOMContentLoaded`), retrieve `lastModelId` and `lastStepsValue` from `localStorage` and apply to form elements (`#model`, `#steps`).
-    - On `#model` change, save new `modelId` to `localStorage`.
-    - On `#steps` input change, save new `stepsValue` to `localStorage`.
-    - On form submission (`#generate-form`), save current `modelId` and `stepsValue` to `localStorage`.
-
-### Planned: Model-Specific Step Handling
-- **Goal:** Adapt the Steps slider UI based on the selected model's configuration (fixed steps, range, or default).
-- **Prerequisite:** Backend update to parse new `.env` format and include step info in `/api/models` response.
-- **Implementation Plan (`main.js`):**
-    - In the `#model` select `change` event listener:
-        - Get step configuration data for the selected model from the data fetched during `initializeModels`.
-        - If `fixed_steps` is defined:
-            - Set the `#steps` slider value to `fixed_steps`.
-            - Disable the `#steps` slider.
-            - Update the `#steps-value` display.
-        - If `steps` range (`min`, `max`, `default`) is defined:
-            - Update `#steps` slider `min`, `max`, `value` attributes.
-            - Enable the `#steps` slider.
-            - Update the `#steps-value` display.
-        - Otherwise (no specific step info):
-            - Reset `#steps` slider to default range/value (e.g., min 20, max 50, value 30).
-            - Enable the `#steps` slider.
-            - Update the `#steps-value` display.
+- **Main Form (T2I/T2V Handling):**
+  - Modified `initializeModels` to populate the main model dropdown (`#model`) with both T2I ('image') and T2V ('t2v') models.
+  - Modified `handleModelChange` to update the generate button text (⚡ Generate Image / 🎬 Generate Video) based on the selected model's type.
+  - Updated the form submission logic in `initializeGenerationForm`:
+    - Detects selected model type (T2I or T2V).
+    - Sets the target API endpoint (`/api/generate` or `/api/generate_t2v`).
+    - Constructs the appropriate request payload for the endpoint.
+    - Uses a `feedbackType` variable ('Image' or 'Video') for UI messages.
+  - Updated `pollGenerationStatus` to accept and use `feedbackType` for more accurate messaging.
+- **localStorage Persistence (Existing):**
+  - Keeps track of last selected model, steps, guidance, keep prompt preference, and kept prompt text.
+- **Dynamic Step/Guidance Config (Existing):**
+  - Adjusts slider ranges/values based on `step_config` from model data.
+- **Video Generation Modal (I2V):**
+  - Logic for the separate Image-to-Video modal remains unchanged.
 
 ## Technical Decisions
 - Python 3.12 + Flask Backend
 - SQLite for data persistence and queue management
-- Local filesystem for image storage
+- Local filesystem for image/video storage
 - REST API only, no WebSocket
 - No authentication required
 - Models loaded on-demand to manage memory
 
 ## Progress Log
-[Current] Planning Phase - Initial Architecture Design
-- Defined storage structure
-- Specified database schema
-- Identified core API endpoints
-- Listed supported models
+- Added `/generate_t2v` endpoint for Text-to-Video.
+- Updated `/generate_video` endpoint to specifically handle Image-to-Video.
+- Updated `API.md` documentation.
+- Updated `NOTES.md` state.
+- Added `MODEL_I2V` to `.env` (manual step for user).
+- Fixed I2V model detection in `main.js` to recognize models with "i2v" in their ID even if type property wasn't explicitly set to "i2v".
+- **Updated main generation form (`main.js`) to support both T2I and T2V models.**
+
+## Current Goal
+- Implement the backend logic in `GenerationPipeline` to handle the different job types (`image`, `t2v`, `i2v`) based on `settings['type']`.
+- Ensure `AVAILABLE_MODELS` in `app/models/__init__.py` correctly loads and identifies T2V and I2V models based on `.env` configuration.
+- Update frontend (`main.js`, `index.html`) to allow selection between Text-to-Image, Text-to-Video, and initiating Image-to-Video generation.
+- **Verify frontend (`main.js`, `index.html`) correctly allows selection between Text-to-Image and Text-to-Video from the main form.**
+
+## Design Decisions (Video Feature Refined)
+- **Models:**
+    - Text-to-Video: `wan-t2v` (via `MODEL_T2V` env var). Triggered from main form (new option).
+    - Image-to-Video: `Wan-AI/Wan2.1-I2V-14B-480P` (via `MODEL_I2V` env var). Triggered from existing image (e.g., gallery 🎥 button).
+- **API:**
+    - `/generate`: Text-to-Image only.
+    - `/generate_t2v`: Text-to-Video only. Needs `model_id` (T2V type), `prompt`, `settings`.
+    - `/generate_video`: Image-to-Video only. Needs `source_image_id`, `video_model_id` (I2V type), `video_prompt`, `settings`.
+- **Backend:**
+    - `GenerationPipeline.process_job` needs branching logic based on `job['settings']['type']`.
+    - `QueueManager` needs to store job type (via `settings`).
+    - `ImageManager` might need adaptation to handle video paths/metadata, or a separate `VideoManager` created. (Current approach: use `ImageManager` with video paths/metadata).
+- **Database:**
+    - `jobs` table needs `settings['type']` reliably set.
+    - `jobs.media_path` stores output path (either .png or .mp4).
+    - `images` table stores metadata; may need a `media_type` column eventually.
+- **Frontend:**
+    - Main form: Add option/dropdown to select output type (Image or Video (T2V)). Model list should filter accordingly.
+    - Gallery: Keep 🎥 button on images for I2V. Modal needs to prompt for `video_prompt` and select an I2V model.
+
+## Model Manager (`manager.py`) Updates (Revised)
+- Need methods like `generate_text_to_video(...)` and `generate_image_to_video(...)`.
+- Need to handle loading/unloading of T2V and I2V models distinctly.
+- Imports for specific pipelines (e.g., `DiffusionPipeline` for T2V, `WanImageToVideoPipeline` for I2V).
+- Corrected `get_model` to load based on `i2v` or `t2v` type from config.
+- Renamed `generate_video` -> `generate_image_to_video`.
+- Added placeholder `generate_text_to_video`.
+
+## Function List (Updated)
+(See Core Functions section above - note ModelManager changes)
+
+## Model Issues and Fixes
+- **I2V Model Detection:**
+  - Issue: Models with IDs containing "i2v" (e.g., "wan-i2v-14b") weren't being recognized when the model's type property wasn't explicitly set to "i2v".
+  - Fix: Updated `openVideoGenModal()` in `main.js` to detect I2V models using two criteria:
+    1. Model's type property is set to 'i2v' OR
+    2. Model ID contains 'i2v' (case insensitive)
+  - This accommodates both properly typed models from the server and models that are only identifiable by their ID.
+  - Added fallback description text for models missing description field.
+
+## UI Updates (Revised)
+- **`index.html` / `main.js`:**
+  - **Main form now supports T2I and T2V model selection.**
+  - Model dropdown filters to show only T2I/T2V models.
+  - Generate button text updates dynamically.
+  - Form submits to correct API endpoint based on model type.
+- **`gallery.html` / `main.js`:**
+  - Ensure 🎥 button triggers I2V flow (modal for video prompt, select I2V model).
+- Display videos correctly in gallery/modals (`<video>` tag).
+
+## Database Considerations (Revised)
+- `jobs` table needs `settings['type']` reliably set.
+- Consider adding `media_type` ('image'/'video') to `images` table long-term.

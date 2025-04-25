@@ -123,6 +123,144 @@ def generate_image():
         logger.error(f"Error submitting generation job: {str(e)}")
         raise APIError("Failed to submit generation job", 500)
 
+@bp.route("/generate_t2v", methods=["POST"])
+def generate_t2v():
+    """Submit a text-to-video generation request"""
+    try:
+        data = request.get_json()
+        if not data:
+            raise APIError("No data provided", 400)
+
+        # Validate required fields
+        required_fields = ["model_id", "prompt"]
+        missing_fields = [field for field in required_fields if field not in data]
+        if missing_fields:
+            raise APIError(f"Missing required fields: {', '.join(missing_fields)}", 400)
+
+        # Validate model_id
+        model_id = data["model_id"]
+        if model_id not in AVAILABLE_MODELS:
+            raise APIError(
+                f"Invalid model_id. Available models: {', '.join(AVAILABLE_MODELS.keys())}",
+                400
+            )
+        model_config = AVAILABLE_MODELS[model_id]
+        # Ensure the selected model is specifically a Text-to-Video model
+        # We might need a more specific type like 't2v' or check capabilities
+        if model_config.get("type") != "t2v": # <-- CORRECTED CHECK
+             raise APIError(f"Model {model_id} is not a text-to-video generation model", 400)
+        # Add further check if needed, e.g., model_config.get("subtype") == "t2v"
+
+        # Validate prompt length (optional)
+        prompt = data["prompt"]
+        if len(prompt) > 2000: # Keeping consistent length validation
+            raise APIError("Prompt too long. Maximum length is 2000 characters.", 400)
+
+        # Get optional settings
+        settings = data.get("settings", {})
+        settings["type"] = "t2v" # Mark job type specifically for text-to-video
+
+        # Add default video settings if needed (e.g., fps)
+        settings.setdefault("fps", 16)
+        # Remove default duration, let it be derived from num_frames later if needed
+        # settings.setdefault("duration", 8) # Example default duration
+
+        # Create job in the database first
+        job_id = QueueManager.add_job(model_id, prompt, settings)
+
+        # Add to generation queue (in-memory)
+        job_details = {
+            "id": job_id,
+            "model_id": model_id,
+            "prompt": prompt,
+            "settings": settings # Includes type: t2v
+        }
+        g.generator.add_job(job_details)
+
+        logger.info(f"Added T2V job to queue: {job_id}")
+
+        return jsonify({
+            "job_id": job_id,
+            "status": "pending",
+            "message": "Text-to-Video generation job submitted successfully."
+        }), 202 # Use 202 Accepted for async tasks
+
+    except APIError:
+        raise
+    except Exception as e:
+        logger.error(f"Error submitting text-to-video generation job: {str(e)}")
+        raise APIError("Failed to submit text-to-video generation job", 500)
+
+@bp.route("/generate_video", methods=["POST"])
+def generate_video():
+    """Submit a video generation request based on an existing image"""
+    try:
+        data = request.get_json()
+        if not data:
+            raise APIError("No data provided", 400)
+
+        # Validate required fields
+        required_fields = ["source_image_id", "video_model_id", "video_prompt"]
+        missing_fields = [field for field in required_fields if field not in data]
+        if missing_fields:
+            raise APIError(f"Missing required fields: {', '.join(missing_fields)}", 400)
+
+        source_image_id = data["source_image_id"]
+        video_model_id = data["video_model_id"]
+        video_prompt = data["video_prompt"]
+
+        # Validate video_model_id
+        if video_model_id not in AVAILABLE_MODELS:
+            raise APIError(f"Unknown video model ID: {video_model_id}", 400)
+        model_config = AVAILABLE_MODELS[video_model_id]
+        if model_config.get("type") != "i2v": # <-- CORRECTED CHECK for Image-to-Video
+            raise APIError(f"Model {video_model_id} is not an image-to-video generation model", 400)
+
+        # Validate source_image_id (check if image exists)
+        source_image_info = ImageManager.get_image_info(source_image_id)
+        if not source_image_info:
+            raise APIError(f"Source image not found: {source_image_id}", 404)
+
+        # Validate video prompt length (optional, keeping consistent)
+        if len(video_prompt) > 2000:
+            raise APIError("Video prompt too long. Maximum length is 2000 characters.", 400)
+
+        # Get optional settings and merge with defaults/required info
+        settings = data.get("settings", {})
+        settings["source_image_id"] = source_image_id
+        settings["type"] = "video" # Mark job type
+        # Add default video settings if needed (e.g., fps)
+        settings.setdefault("fps", 16)
+        settings.setdefault("guidance_scale", 5.5) # Example default
+
+        # Create job in the database first
+        # Pass video_prompt as the main prompt for the job record
+        job_id = QueueManager.add_job(video_model_id, video_prompt, settings)
+
+        # Add to generation queue (in-memory)
+        # The GenerationPipeline needs the full context
+        job_details = {
+            "id": job_id,
+            "model_id": video_model_id,
+            "prompt": video_prompt, # Video prompt
+            "settings": settings # Includes source_image_id and type: video
+        }
+        g.generator.add_job(job_details)
+
+        logger.info(f"Added VIDEO job to queue: {job_id} (source: {source_image_id})")
+
+        return jsonify({
+            "job_id": job_id,
+            "status": "pending",
+            "message": "Video generation job submitted successfully."
+        }), 202 # Use 202 Accepted for async tasks
+
+    except APIError:
+        raise
+    except Exception as e:
+        logger.error(f"Error submitting video generation job: {str(e)}")
+        raise APIError("Failed to submit video generation job", 500)
+
 @bp.route("/status/<job_id>", methods=["GET"])
 def get_job_status(job_id):
     """Get the status of a specific job"""
@@ -194,6 +332,32 @@ def get_image(image_id):
     except Exception as e:
         logger.error(f"Error retrieving image: {str(e)}")
         raise APIError("Failed to retrieve image", 500)
+
+@bp.route("/get_video/<video_id>", methods=["GET"])
+def get_video(video_id):
+    """Get a generated video"""
+    try:
+        # Assuming videos are stored in the same 'images' table and managed by ImageManager
+        # We might need to adjust ImageManager or DB schema later if this assumption changes
+        video_path = ImageManager.get_image_path(video_id) # Use existing function for path retrieval
+        if not video_path:
+            raise APIError("Video not found", 404)
+
+        # Verify it's likely a video file
+        if not video_path.lower().endswith(".mp4"):
+            logger.warning(f"Requested video ID {video_id} does not point to an MP4 file: {video_path}")
+            # Optional: Could check metadata type here if ImageManager provided it
+            # For now, rely on path extension.
+            raise APIError("Requested resource is not a video file", 400)
+
+        # Serve the file with the correct MIME type
+        return send_file(video_path, mimetype="video/mp4")
+
+    except APIError:
+        raise
+    except Exception as e:
+        logger.error(f"Error retrieving video: {str(e)}")
+        raise APIError("Failed to retrieve video", 500)
 
 @bp.route("/image/<image_id>/metadata", methods=["GET"])
 def get_image_metadata(image_id):
@@ -581,6 +745,7 @@ def get_gallery():
             query = f"""
                 SELECT
                     id,
+                    file_path,
                     json_extract(metadata, '$.model_id') as model_id,
                     json_extract(metadata, '$.prompt') as prompt,
                     created_at,
@@ -596,6 +761,7 @@ def get_gallery():
             query = f"""
                 SELECT
                     id,
+                    file_path,
                     json_extract(metadata, '$.model_id') as model_id,
                     json_extract(metadata, '$.prompt') as prompt,
                     created_at,
@@ -627,6 +793,7 @@ def get_gallery():
             formatted_images.append({
                 "id": image["id"],
                 "model_id": image["model_id"],
+                "file_path": image["file_path"],
                 "prompt": image["prompt"],
                 "created_at": image["created_at"],
                 "settings": settings

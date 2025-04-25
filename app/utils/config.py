@@ -105,7 +105,7 @@ def parse_model_config() -> Dict[str, Dict[str, Any]]:
                     logger.info(f"Model {name} is defined but disabled for download")
 
                 # Determine model type from name for automatic file lists
-                model_type = "generic"
+                model_type = "generic" # Start with generic
                 if "flux" in name.lower():
                     model_type = "flux"
                 elif "sd-3" in name.lower():
@@ -145,13 +145,35 @@ def parse_model_config() -> Dict[str, Dict[str, Any]]:
                 else: # DEBUG
                     print(f"DEBUG: No options_json found for {key}") # DEBUG
 
+                # Determine final model type: Explicit JSON type > Heuristic > Default ('image')
+                final_model_type = 'image' # Default to image
+                if model_type != 'generic': # If heuristic found something specific
+                    final_model_type = model_type
+
+                # --- Override model_type if specified in step_config --- #
+                if isinstance(step_config, dict) and 'type' in step_config:
+                    explicit_type = step_config['type']
+                    if isinstance(explicit_type, str) and explicit_type:
+                        logger.debug(f"Overriding model type with explicit type '{explicit_type}' from JSON options for {name}")
+                        final_model_type = explicit_type.lower() # Use explicit type, lowercased
+                    else:
+                        logger.warning(f"'type' found in JSON options for {name}, but it's not a valid string: {explicit_type}")
+                # --- End Override --- #
+
+                # --- Standardize non-video types to 'image' --- #
+                if final_model_type not in ['t2v', 'i2v']:
+                    if final_model_type != 'image': # Log if we are changing it
+                        logger.debug(f"Standardizing model type '{final_model_type}' to 'image' for {name}")
+                    final_model_type = 'image'
+                # --- End Standardization --- #
+
                 models_config[name] = {
                     "repo": repo.strip(),
                     "description": description.strip(),
                     "source": source.strip().lower(),
                     "requires_auth": requires_auth.strip().lower() == "true",
                     "download_enabled": download_enabled,
-                    "type": model_type,
+                    "type": final_model_type, # Use the determined final type
                     "files": files,
                     "step_config": step_config # Add parsed step config
                 }

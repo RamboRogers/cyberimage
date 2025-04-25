@@ -154,14 +154,22 @@
                                     </div>
                                 </div>
 
-                                <div class="input-group compact">
-                                    <label for="guidance">Guidance</label>
-                                    <div class="input-with-value">
-                                        <input type="range" id="guidance" name="guidance" min="1" max="20" step="0.5" value="7.5" class="slider">
-                                        <span id="guidance-value" class="value-display">7.5</span>
+                                <div class="input-group">
+                                    <label for="guidance">Guidance Scale</label>
+                                    <input type="range" id="guidance" name="guidance" min="1" max="20" value="7.5" step="0.5" class="slider">
+                                    <span class="slider-value" id="guidance-value">7.5</span>
                                     </div>
+
+                                <!-- ADDED: T2V Frames Slider (hidden by default) -->
+                                <div class="input-group" id="t2v-frames-group" style="display: none;">
+                                    <label for="num_frames">Number of Frames</label>
+                                    <input type="range" id="num_frames" name="num_frames" min="5" max="33" value="17" step="4" class="slider">
+                                    <span class="slider-value" id="num_frames-value">17</span>
+                                    <small>Video length depends on model & FPS. Must be 5, 9, 13, 17...</small>
                                 </div>
-                                <div class="input-group compact keep-prompt-group">
+                                <!-- END ADDED -->
+
+                                <div class="input-group keep-prompt-group">
                                     <label for="keep_prompt">Keep Prompt</label>
                                     <input type="checkbox" id="keep_prompt" name="keep_prompt" class="checkbox-field">
                                 </div>
@@ -206,11 +214,19 @@
             <div class="gallery-grid">
                 {% for image in recent_images %}
                 <div class="gallery-item" data-image-id="{{ image.id }}">
+                    {% if 'vid_' in image.id or '_vid_' in image.id %}
+                    <video controls preload="metadata">
+                        <source src="{{ url_for('api.get_video', video_id=image.id) }}" type="video/mp4">
+                        Your browser does not support the video tag.
+                    </video>
+                    {% else %}
                     <img src="{{ url_for('api.get_image', image_id=image.id) }}"
                          alt="{{ image.prompt[:50] }}..."
                          loading="lazy">
+                    {% endif %}
                     <div class="quick-actions">
                         <button class="action-copy-prompt" title="Copy Prompt" data-prompt="{{ image.prompt }}">📋</button>
+                        <button class="action-generate-video" title="Generate Video from Image" data-image-id="{{ image.id }}" data-image-prompt="{{ image.prompt }}">🎥</button>
                     </div>
                     <div class="gallery-item-info">
                         <p class="prompt">{{ image.prompt[:100] }}...</p>
@@ -267,6 +283,52 @@
                         </button>
                     </div>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal for video generation -->
+    <div id="videoGenModal" class="modal video-gen-modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Generate Video from Image</h2>
+                <button class="action-close" aria-label="Close modal" onclick="closeVideoGenModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="video-gen-preview">
+                    <img src="" alt="Source image" id="videoGenSourceImage">
+                    <div class="source-prompt-display">
+                        <h3>Original Prompt:</h3>
+                        <pre id="videoGenSourcePrompt">Loading...</pre>
+                    </div>
+                </div>
+                <form id="video-generate-form">
+                    <input type="hidden" id="videoGenSourceImageId" name="source_image_id">
+                    <div class="input-group">
+                        <label for="videoGenPromptInput">Video Prompt:</label>
+                        <textarea
+                            id="videoGenPromptInput"
+                            name="video_prompt"
+                            class="prompt-input"
+                            placeholder="Describe how the video should evolve from the image..."
+                            required
+                            rows="4"
+                        ></textarea>
+                    </div>
+                    <div class="input-group">
+                        <label for="videoGenModelSelect">Video Model:</label>
+                        <select id="videoGenModelSelect" name="video_model_id" class="input-field" required>
+                            <option value="">Loading models...</option>
+                            <!-- Video models will be populated by JavaScript -->
+                        </select>
+                    </div>
+                    <div class="modal-actions">
+                        <button type="submit" class="button button-generate">
+                            <span class="button-icon">▶️</span> Generate Video
+                        </button>
+                         <button type="button" class="button button-cancel" onclick="closeVideoGenModal()">Cancel</button>
+                    </div>
+                </form>
             </div>
         </div>
     </div>

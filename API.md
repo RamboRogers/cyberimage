@@ -624,6 +624,145 @@ curl -X POST http://localhost:5050/api/enrich \
 }'
 ```
 
+### 11. Generate Text-to-Video (New)
+Submit a new video generation request based purely on text input.
+
+**Endpoint:** `POST /generate_t2v`
+
+**Request Body:**
+```json
+{
+    "model_id": "wan-t2v", // Example ID for a Text-to-Video model
+    "prompt": "A fluffy cat chasing a laser pointer across a wooden floor",
+    "settings": {
+        "guidance_scale": 5.5,
+        "fps": 16,
+        "duration": 8 // Desired duration in seconds (example)
+        // Other video-specific settings might go here
+    }
+}
+```
+
+**Parameters:**
+- `model_id` (required): The ID of the Text-to-Video generation model to use (needs to be listed in `/models` response, marked appropriately).
+- `prompt` (required): Text description guiding the video generation.
+- `settings` (optional): Video generation parameters.
+  - `guidance_scale`: How closely to follow the prompt (default might vary by model).
+  - `fps`: Frames per second for the output video (default: 16).
+  - `duration`: Desired duration of the video in seconds (model/implementation dependent).
+  - Note: Height/Width might be fixed by the model or configurable via settings.
+
+**Response (Job Submission):**
+```json
+{
+    "job_id": "t2vjob_abcdef123",
+    "status": "pending",
+    "message": "Text-to-Video generation job submitted successfully."
+}
+```
+
+**Response (Job Status `GET /status/<job_id>`):**
+Similar to image/video generation, but status updates reflect text-to-video progress. Completed status will include video details. The `videos` array will contain the output.
+
+**Get Generated Video:** Use the existing `GET /get_video/<video_id>` endpoint.
+
+**Example curl (Generate T2V):**
+```bash
+curl -X POST http://localhost:5050/api/generate_t2v \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "model_id": "wan-t2v",
+    "prompt": "A fluffy cat chasing a laser pointer across a wooden floor",
+    "settings": { "fps": 24, "duration": 10 }
+  }'
+```
+
+### 12. Generate Image-to-Video (Previously Generate Video)
+Submit a new video generation request based on an existing image and a guiding prompt.
+
+**Endpoint:** `POST /generate_video`
+
+**Request Body:**
+```json
+{
+    "source_image_id": "img_123456",
+    "video_model_id": "Wan-AI/Wan2.1-I2V-14B-480P", // Example ID for an Image-to-Video model
+    "video_prompt": "The camera slowly zooms out, revealing the bird is on a branch...",
+    "settings": {
+        "guidance_scale": 5.5,
+        "fps": 16
+        // Other video-specific settings might go here
+    }
+}
+```
+
+**Parameters:**
+- `source_image_id` (required): The ID of the existing generated image to use as the starting point.
+- `video_model_id` (required): The ID of the Image-to-Video generation model to use (needs to be listed in `/models` response, marked appropriately).
+- `video_prompt` (required): Text description guiding the video generation (motion, changes).
+- `settings` (optional): Video generation parameters.
+  - `guidance_scale`: How closely to follow the prompt (default might vary by model).
+  - `fps`: Frames per second for the output video (default: 16).
+  - Note: Height/Width will be derived from the source image and model constraints.
+
+**Response (Job Submission):**
+```json
+{
+    "job_id": "i2vjob_abcdef123",
+    "status": "pending",
+    "message": "Image-to-Video generation job submitted successfully."
+}
+```
+
+**Response (Job Status `GET /status/<job_id>`):**
+Similar to other generation jobs. Completed status will include video details in the `videos` array.
+
+```json
+{
+    "id": "i2vjob_abcdef123",
+    "status": "completed",
+    "model_id": "Wan-AI/Wan2.1-I2V-14B-480P",
+    "video_prompt": "The camera slowly zooms out...",
+    "source_image_id": "img_123456",
+    "settings": { // ... video settings ... },
+    // ... timestamps ...
+    "message": "Generated 1 video",
+    "progress": { // ... progress details ... },
+    "videos": [ // Changed from "images" for clarity
+        {
+            "id": "vid_78910", // New ID for the video record
+            "file_path": "videos/2024/07/26/vid_78910.mp4", // Example path
+            "created_at": "2024-07-26T14:00:00Z",
+            "metadata": {
+                "video_model_id": "Wan-AI/Wan2.1-I2V-14B-480P",
+                "video_prompt": "The camera slowly zooms out...",
+                "source_image_id": "img_123456",
+                "settings": { // ... video settings ... },
+                "duration_seconds": 5 // Example duration
+            }
+        }
+    ]
+}
+```
+
+**Get Generated Video:** Use the existing `GET /get_video/<video_id>` endpoint.
+
+**Endpoint:** `GET /get_video/<video_id>`
+
+**Response:** MP4 video file
+
+**Example curl (Generate I2V):**
+```bash
+curl -X POST http://localhost:5050/api/generate_video \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "source_image_id": "img_123456",
+    "video_model_id": "Wan-AI/Wan2.1-I2V-14B-480P",
+    "video_prompt": "The scene animates with subtle wind blowing through the trees",
+    "settings": { "guidance_scale": 5.0 }
+  }'
+```
+
 ## Error Handling
 
 All endpoints return appropriate HTTP status codes:

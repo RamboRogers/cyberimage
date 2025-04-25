@@ -154,3 +154,45 @@
 ## Current Focus
 Completed Phase 5: Testing & Optimization
 All planned phases are now complete!
+
+## [YYYY-MM-DD] - Add Video Generation Feature (Initial Phase)
+
+- **API.md:** Added documentation for new `/api/generate_video` endpoint and corresponding `GET /get_video/<video_id>`.
+- **NOTES.md:** Documented design, model details, API endpoint, planned changes for video generation.
+- **Planned Changes:**
+    - `app/models/manager.py`: Add imports, video model config, update `get_model`, add `generate_video` stub.
+    - `app/templates/index.html`: Add 🎥 button.
+    - `app/templates/gallery.html`: Add 🎥 button.
+    - [x] Backend route for `/api/generate_video` (in `app/api/routes.py`).
+    - [x] `GenerationPipeline.process_job` update for video jobs (in `app/models/generator.py`).
+    - Frontend JS for modal and video handling.
+
+## [YYYY-MM-DD] - Image-to-Video Model Detection Fix
+
+- **Issue:** The application was failing to recognize "wan-i2v-14b" as a valid image-to-video model, causing an error: "Error: Model wan-i2v-14b is not a video generation model".
+- **Fix:**
+  - Updated `app/static/js/main.js`:
+    - Modified `openVideoGenModal()` function to detect I2V models based on either:
+      - Model's type property being 'i2v' OR
+      - Model ID containing 'i2v' in its name
+    - Added fallback description for models missing description field
+  - This change allows proper detection of I2V models regardless of server-side type configuration
+
+## [YYYY-MM-DD] - Main Form T2V/T2I Integration
+
+- **Goal:** Allow Text-to-Video (T2V) generation directly from the main prompt form, alongside Text-to-Image (T2I).
+- **Changes in `app/static/js/main.js`:**
+  - Added `API_T2V_GEN` constant (`/api/generate_t2v`).
+  - Modified `initializeModels()`:
+    - Filters models for the main dropdown to include types 'image' and 't2v'.
+    - Stores model type information.
+    - Adds type label (`[Image]` or `[Video]`) to dropdown options.
+  - Modified `handleModelChange()`:
+    - Updates the main generate button text ("Generate Image" or "Generate Video") based on selected model type.
+  - Modified `initializeGenerationForm()` submit handler:
+    - Detects the selected model's type ('image' or 't2v').
+    - Sets `apiUrl` to the correct endpoint (`API_IMAGE_GEN` or `API_T2V_GEN`).
+    - Builds the appropriate `requestData` payload for the selected type (including `settings.type`).
+    - Uses a `feedbackType` ('Image' or 'Video') for UI messages.
+  - Modified `pollGenerationStatus()`:
+    - Added `feedbackType` parameter to display correct messages (e.g., "Generating Video...").

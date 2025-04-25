@@ -9,6 +9,10 @@ click==8.1.8
 click-default-group==1.2.4
 coverage==7.6.12
 diffusers
+torchvision
+ftfy
+imageio-ffmpeg
+imageio
 filelock==3.17.0
 Flask==3.1.0
 Flask-Cors==5.0.0

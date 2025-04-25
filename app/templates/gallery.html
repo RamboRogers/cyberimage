@@ -70,6 +70,7 @@
                         <div class="quick-actions">
                             <button class="action-copy-prompt" title="Copy Prompt">📋</button>
                             <button class="action-favorite" title="Add to Favorites">⭐</button>
+                            <button class="action-generate-video" title="Generate Video from Image">🎥</button>
                             <button class="action-download" title="Download">⬇️</button>
                             <button class="action-delete" title="Delete Image">🗑️</button>
                         </div>
@@ -162,6 +163,52 @@
             <div class="modal-actions">
                 <button id="confirmDelete" class="button-delete">Delete</button>
                 <button id="cancelDelete" class="button-cancel">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal for video generation -->
+    <div id="videoGenModal" class="modal video-gen-modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Generate Video from Image</h2>
+                <button class="action-close" aria-label="Close modal" onclick="closeVideoGenModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="video-gen-preview">
+                    <img src="" alt="Source image" id="videoGenSourceImage">
+                    <div class="source-prompt-display">
+                        <h3>Original Prompt:</h3>
+                        <pre id="videoGenSourcePrompt">Loading...</pre>
+                    </div>
+                </div>
+                <form id="video-generate-form">
+                    <input type="hidden" id="videoGenSourceImageId" name="source_image_id">
+                    <div class="input-group">
+                        <label for="videoGenPromptInput">Video Prompt:</label>
+                        <textarea
+                            id="videoGenPromptInput"
+                            name="video_prompt"
+                            class="prompt-input"
+                            placeholder="Describe how the video should evolve from the image..."
+                            required
+                            rows="4"
+                        ></textarea>
+                    </div>
+                    <div class="input-group">
+                        <label for="videoGenModelSelect">Video Model:</label>
+                        <select id="videoGenModelSelect" name="video_model_id" class="input-field" required>
+                            <option value="">Loading models...</option>
+                            <!-- Video models will be populated by JavaScript -->
+                        </select>
+                    </div>
+                    <div class="modal-actions">
+                        <button type="submit" class="button button-generate">
+                            <span class="button-icon">▶️</span> Generate Video
+                        </button>
+                         <button type="button" class="button button-cancel" onclick="closeVideoGenModal()">Cancel</button>
+                    </div>
+                </form>
             </div>
         </div>
     </div>

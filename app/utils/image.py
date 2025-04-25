@@ -29,38 +29,72 @@ class ImageManager:
         return utc_dt.astimezone(local_tz)
 
     @staticmethod
-    def save_image(image: Image.Image, job_id: str, metadata: Dict) -> str:
-        """Save an image and record it in the database"""
+    def save_image(image: Optional[Image.Image], job_id: str, metadata: Dict, image_id: Optional[str] = None, file_path: Optional[str] = None) -> str:
+        """Save an image/video record in the database. If image is provided, save it.
+
+        Args:
+            image: PIL Image object (optional, provide None if file already saved, e.g., video)
+            job_id: The ID of the job that generated the media.
+            metadata: Dictionary containing metadata about the media.
+            image_id: Optional pre-generated ID for the media record.
+            file_path: Optional pre-generated relative file path for the media record.
+
+        Returns:
+            The ID of the saved media record.
+        """
         db = get_db()
-        image_id = str(uuid.uuid4())
+        # Use provided ID or generate a new one
+        media_id = image_id if image_id else str(uuid.uuid4())
 
-        # Get job information for metadata
-        job = db.execute(
-            """
-            SELECT model_id, prompt, negative_prompt, settings
-            FROM jobs WHERE id = ?
-            """,
-            (job_id,)
-        ).fetchone()
+        # Get job information for metadata (optional, enhance metadata if job exists)
+        try:
+            job = db.execute(
+                """
+                    SELECT model_id, prompt, settings
+                FROM jobs WHERE id = ?
+                """,
+                (job_id,)
+            ).fetchone()
 
-        if job:
-            # Update metadata with job information
-            metadata.update({
-                "model_id": job["model_id"],
-                "prompt": job["prompt"],
-                "negative_prompt": job["negative_prompt"] if job["negative_prompt"] else None,
-                "settings": json.loads(job["settings"])
-            })
+            if job:
+                job_settings = json.loads(job["settings"])
+                # Update metadata with job info, ensure settings are merged/overwritten correctly
+                metadata.update({
+                    "model_id": metadata.get("model_id", job["model_id"]), # Prioritize metadata's model_id
+                    "prompt": metadata.get("prompt", job["prompt"]),       # Prioritize metadata's prompt
+                    # Merge settings, prioritizing specific metadata settings over job settings
+                    "settings": {**job_settings, **metadata.get("settings", {})}
+                })
+            else:
+                current_app.logger.warning(f"Job {job_id} not found when saving media {media_id}")
+        except Exception as e:
+            current_app.logger.error(f"Error fetching job info {job_id} for media {media_id}: {e}")
 
-        # Create a directory structure by date to organize images
-        today = datetime.utcnow().strftime("%Y/%m/%d")
-        image_dir = os.path.join(current_app.config["IMAGES_PATH"], today)
-        os.makedirs(image_dir, exist_ok=True)
+        relative_path = None
+        full_save_path = None
 
-        # Save the image
-        file_name = f"{image_id}.png"
-        file_path = os.path.join(image_dir, file_name)
-        image.save(file_path, "PNG")
+        if file_path:
+            # Use pre-generated relative path
+            relative_path = file_path
+            full_save_path = os.path.join(current_app.config["IMAGES_PATH"], relative_path)
+            current_app.logger.debug(f"Using pre-defined path for media {media_id}: {relative_path}")
+        elif image:
+            # Generate path and save the image file
+            today = datetime.utcnow().strftime("%Y/%m/%d")
+            image_dir = os.path.join(current_app.config["IMAGES_PATH"], today)
+            os.makedirs(image_dir, exist_ok=True)
+
+            file_name = f"{media_id}.png"
+            relative_path = os.path.join(today, file_name)
+            full_save_path = os.path.join(image_dir, file_name)
+            current_app.logger.debug(f"Saving new image for media {media_id} to: {relative_path}")
+            try:
+                image.save(full_save_path, "PNG")
+            except Exception as save_err:
+                raise Exception(f"Failed to save image file to {full_save_path}: {save_err}")
+        else:
+            # Error: No image provided and no file_path provided
+            raise ValueError("ImageManager.save_image requires either an image object or a file_path.")
 
         # Record in database
         try:
@@ -69,16 +103,18 @@ class ImageManager:
                 INSERT INTO images (id, job_id, file_path, metadata)
                 VALUES (?, ?, ?, ?)
                 """,
-                (image_id, job_id, os.path.join(today, file_name), json.dumps(metadata))
+                (media_id, job_id, relative_path, json.dumps(metadata))
             )
             db.commit()
-            return image_id
+            current_app.logger.info(f"Saved media record {media_id} to database.")
+            return media_id
         except Exception as e:
-            # Clean up the image file if database insert fails
-            if os.path.exists(file_path):
-                os.remove(file_path)
             db.rollback()
-            raise Exception(f"Failed to save image: {str(e)}")
+            # Clean up the image file only if we created it in this function call
+            if full_save_path and not file_path and os.path.exists(full_save_path):
+                current_app.logger.warning(f"Rolling back DB commit, deleting created file: {full_save_path}")
+                os.remove(full_save_path)
+            raise Exception(f"Failed to save media record {media_id} to database: {str(e)}")
 
     @staticmethod
     def get_image_path(image_id: str) -> Optional[str]:
