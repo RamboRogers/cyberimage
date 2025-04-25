@@ -463,14 +463,14 @@ class ModelManager:
                         model_config['repo'],
                         subfolder="image_encoder",
                         torch_dtype=encoder_dtype,
-                        local_files_only=True, # Assume local for now
+                        local_files_only=False, # Allow download if missing
                         cache_dir=model_path
                     )
                     vae = AutoencoderKLWan.from_pretrained(
                         model_path,
                         subfolder="vae",
                         torch_dtype=vae_dtype,
-                        local_files_only=True, # Assume local for now
+                        local_files_only=False, # Allow download if missing
                         cache_dir=model_path
                     )
                     pipe = WanImageToVideoPipeline.from_pretrained(
@@ -478,7 +478,7 @@ class ModelManager:
                         vae=vae,
                         image_encoder=image_encoder,
                         torch_dtype=video_dtype,
-                        local_files_only=True, # Assume local for now
+                        local_files_only=False, # Allow download if missing
                         cache_dir=model_path
                     )
 
