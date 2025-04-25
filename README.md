@@ -146,7 +146,9 @@ cd cyberimage
 ./run.sh start
 ```
 
-3. Using docker-compose :
+Alternatively, use Docker or Docker Compose directly:
+
+3. Using docker-compose:
 ```bash
 # Start the application
 docker-compose up -d
@@ -158,7 +160,7 @@ docker-compose logs -f
 docker-compose down
 ```
 
-3. Using Docker directly:
+4. Using Docker CLI:
 ```bash
 # Build the image
 docker build -t cyberimage .
@@ -174,7 +176,7 @@ docker run -d \
   cyberimage
 ```
 
-4. Open in browser:
+5. Open in browser:
 ```
 http://localhost:7860
 ```
@@ -234,135 +236,111 @@ python download_models.py
 
 ## 🔧 Configuration
 
-Key settings in `.env`:
-```python
-# Model Settings
-
-# Don't change these unless you are NOT using docker
-MODEL_FOLDER=./models
-IMAGES_FOLDER=./images
-
-# For usage with docker (models will grow > 250GB)
-EXTERNAL_MODEL_FOLDER=
-EXTERNAL_IMAGES_FOLDER=
-
-# Huggingface API Key (free! for downloading models)
-HF_TOKEN=
-
-# OpenAI API Key (for enrich prompt), ollama works fine with 127.0.0.1:11434/v1 as the endpoint and the openai api key as the key, or host.docker.internal:11434/v1 as the endpoint and the openai api key as the key if ollama is running on the host machine. The model needs to be something in 127.0.0.1:11434/v1/models on your system.
-OPENAI_ENDPOINT=
-OPENAI_API_KEY=
-
-# OpenAI Model (for enrich prompt button to work)
-OPENAI_MODEL=
-
-# Civitai API Key (optional, for downloading models) (not configured currently)
-CIVITAI_API_KEY=
-
-# Format: MODEL_NAME=<name>;<repo>;<description>;<source>;<requires_auth>
-# Note: When sourcing this file in a shell, quotes are required around values with semicolons
-# When used as .env file directly, quotes are optional but must be consistent
-MODEL_1="flux-1;black-forest-labs/FLUX.1-dev;FLUX Dev;huggingface;true"
-MODEL_2="sd-3.5;stabilityai/stable-diffusion-3.5-large;Stable Diffusion 3.5;huggingface;true"
-MODEL_3="flux-schnell;black-forest-labs/FLUX.1-schnell;FLUX Schnell;huggingface;true"
-MODEL_4="sana-sprint;Efficient-Large-Model/Sana_Sprint_1.6B_1024px_diffusers;Sana Sprint 1.6B;huggingface;true;{\"fixed_steps\": 2}"
-
-# Enable/disable downloading specific models (values: true/false)
-DOWNLOAD_MODEL_1=true
-DOWNLOAD_MODEL_2=true
-DOWNLOAD_MODEL_3=tue
-DOWNLOAD_MODEL_4=true
-```
+Copy the .env.example file to .env and edit the .env file to configure the models you want to use.
 
 ## 🖼️ Managing Models
 
-CyberImage uses environment variables to configure models. You can easily add, remove, or modify models by editing the `.env` file.
+CyberImage uses environment variables in the `.env` file to configure models. You can easily add, remove, or modify models by editing this file.
 
 ### Model Configuration Format
 
 Models are defined using the following format:
 
 ```
-MODEL_<N>=<name>;<repo>;<description>;<source>;<requires_auth>
+MODEL_<N>=<name>;<repo_or_url>;<description>;<source>;<requires_auth>[;<options_json>]
 ```
 
 Where:
-- `<N>`: Numerical index (1, 2, 3, etc.)
-- `<name>`: Unique identifier for the model (used as directory name)
-- `<repo>`: HuggingFace repository path or model identifier
-- `<description>`: Human-readable description
-- `<source>`: Source platform (huggingface, civitai, etc.)
-- `<requires_auth>`: Whether authentication is required (true/false)
+- `<N>`: Numerical index (1, 2, 3, etc.). Must be unique.
+- `<name>`: Unique identifier for the model (used as directory name).
+- `<repo_or_url>`: HuggingFace repository path, GGUF file URL, or other model identifier.
+- `<description>`: Human-readable description shown in the UI.
+- `<source>`: Source platform (`huggingface`, `gguf_url`, `civitai`, etc.). Used by `download_models.py`.
+- `<requires_auth>`: Whether authentication (e.g., HuggingFace token) is required (true/false).
+- `<options_json>` (Optional): A JSON string containing additional model-specific parameters.
+  - `{"fixed_steps": N}`: Forces the model to use a specific number of steps (e.g., for `sana-sprint`).
+  - `{"type": "t2v"}`: Explicitly marks the model as Text-to-Video.
+  - `{"type": "i2v"}`: Explicitly marks the model as Image-to-Video.
+  - *Note:* The application also attempts auto-detection based on model names (e.g., "t2v", "i2v"). Explicit types take precedence.
 
-### Adding Models
+### Adding/Disabling Models
 
-To add a new model, simply add a new line to your `.env` file with an unused index:
-
-```
-MODEL_1=flux-1;black-forest-labs/FLUX.1-dev;FLUX base model;huggingface;true
-MODEL_2=sd-3.5;stabilityai/stable-diffusion-3.5-large;Stable Diffusion 3.5;huggingface;true
-MODEL_3=animagine-xl;cagliostrolab/animagine-xl-4.0;Animagine XL;huggingface;true
-MODEL_4=sana-sprint;Efficient-Large-Model/Sana_Sprint_1.6B_1024px_diffusers;Sana Sprint 1.6B;huggingface;true;{"fixed_steps": 2}
-```
-
-### Disabling Models
-
-You can disable a model's download without removing it from the configuration:
-
-```
-MODEL_1=flux-1;black-forest-labs/FLUX.1-dev;FLUX base model;huggingface;true
-MODEL_2=sd-3.5;stabilityai/stable-diffusion-3.5-large;Stable Diffusion 3.5;huggingface;true
-MODEL_3=animagine-xl;cagliostrolab/animagine-xl-4.0;Animagine XL;huggingface;true
-MODEL_4=sana-sprint;Efficient-Large-Model/Sana_Sprint_1.6B_1024px_diffusers;Sana Sprint 1.6B;huggingface;true;{"fixed_steps": 2}
-DOWNLOAD_MODEL_1=false
-DOWNLOAD_MODEL_2=false
-DOWNLOAD_MODEL_3=false
-DOWNLOAD_MODEL_4=false
-```
-
-This keeps the model in the UI but prevents it from being downloaded automatically.
-
-### Removing Models
-
-To completely remove a model, simply delete or comment out its configuration line in the `.env` file:
-
-```
-MODEL_1=flux-1;black-forest-labs/FLUX.1-dev;FLUX base model;huggingface;true
-MODEL_2=sd-3.5;stabilityai/stable-diffusion-3.5-large;Stable Diffusion 3.5;huggingface;true
-MODEL_3=animagine-xl;cagliostrolab/animagine-xl-4.0;Animagine XL;huggingface;true
-MODEL_4=sana-sprint;Efficient-Large-Model/Sana_Sprint_1.6B_1024px_diffusers;Sana Sprint 1.6B;huggingface;true;{"fixed_steps": 2}
-```
-
-### Model Type Detection
-
-CyberImage automatically detects the model type based on the model name:
-- Names containing "flux" are treated as FLUX models
-- Names containing "sd-3" are treated as SD3 models
-- Names containing "xl" or "sdxl" are treated as SDXL models
-- Names containing "animagine" are treated as SDXL architecture models
+- **To add:** Add a new `MODEL_<N>` line with a unique index and set `DOWNLOAD_MODEL_<N>=true`.
+- **To disable download:** Set `DOWNLOAD_MODEL_<N>=false`. The model remains in the UI if already downloaded.
+- **To remove:** Delete or comment out both the `MODEL_<N>` and `DOWNLOAD_MODEL_<N>` lines.
 
 ### Example Configuration
 
-Here's a complete example with multiple models:
+Here's an example `.env` configuration showing various model types:
 
-```
-# Format: MODEL_NAME=<name>;<repo>;<description>;<source>;<requires_auth>
-# Note: When sourcing this file in a shell, quotes are required around values with semicolons
-# When used as .env file directly, quotes are optional but must be consistent
+```env
+# --- Image Models ---
 MODEL_1="flux-1;black-forest-labs/FLUX.1-dev;FLUX Dev;huggingface;true"
-MODEL_2="sd-3.5;stabilityai/stable-diffusion-3.5-large;Stable Diffusion 3.5;huggingface;true"
-MODEL_3="flux-schnell;black-forest-labs/FLUX.1-schnell;FLUX Schnell;huggingface;true"
-MODEL_4="sana-sprint;Efficient-Large-Model/Sana_Sprint_1.6B_1024px_diffusers;Sana Sprint 1.6B;huggingface;true;{\"fixed_steps\": 2}"
-
-# Enable/disable downloading specific models (values: true/false)
 DOWNLOAD_MODEL_1=true
+
+MODEL_2="sd-3.5;stabilityai/stable-diffusion-3.5-large;Stable Diffusion 3.5;huggingface;true"
 DOWNLOAD_MODEL_2=true
-DOWNLOAD_MODEL_3=tue
+
+MODEL_3="flux-schnell;black-forest-labs/FLUX.1-schnell;FLUX Schnell;huggingface;true"
+DOWNLOAD_MODEL_3=true
+
+MODEL_4="sana-sprint;Efficient-Large-Model/Sana_Sprint_1.6B_1024px_diffusers;Sana Sprint 1.6B (Fixed Steps);huggingface;false;{\\"fixed_steps\\": 2}"
 DOWNLOAD_MODEL_4=true
+
+# --- Video Models ---
+# Text-to-Video (Wan)
+MODEL_5="wan-t2v-1.3b;Wan-AI/Wan2.1-T2V-1.3B-Diffusers;Wan Text2Video 1.3B;huggingface;false;{\\"type\\": \\"t2v\\"}"
+DOWNLOAD_MODEL_5=true
+
+# Image-to-Video (Wan)
+MODEL_6="wan-i2v-14b;Wan-AI/Wan2.1-I2V-14B-480P;Wan Image-to-Video (14B, 480p);huggingface;false;{\\"type\\": \\"i2v\\"}"
+DOWNLOAD_MODEL_6=true
+
+# Text-to-Video (LTX GGUF - requires download_models.py support for gguf_url)
+MODEL_7='LTX-Video-t2v;https://huggingface.co/city96/LTX-Video-gguf/resolve/main/ltx-video-2b-v0.9-Q3_K_S.gguf;LTX Video GGUF T2V;gguf_url;false;{"type": "t2v"}'
+DOWNLOAD_MODEL_7=true
+
+# Image-to-Video (LTX GGUF - uses same file as above)
+MODEL_8='LTX-Video-i2v;https://huggingface.co/city96/LTX-Video-gguf/resolve/main/ltx-video-2b-v0.9-Q3_K_S.gguf;LTX Video GGUF I2V;gguf_url;false;{"type": "i2v"}'
+DOWNLOAD_MODEL_8=false # Set to false if MODEL_7 already downloads the file
+
+# --- Other Examples ---
+# Disabled Model
+MODEL_9="animagine-xl;cagliostrolab/animagine-xl-4.0;Animagine XL;huggingface;true"
+DOWNLOAD_MODEL_9=false
+
+# Commented out/Removed Model (example for Civitai - requires API key and download_models.py support)
+# MODEL_10="my-custom-model;civitai:12345;My Custom Model;civitai;true"
+# DOWNLOAD_MODEL_10=true
 ```
 
-After changing model configurations, restart the application to apply the changes.
+*(Remember to restart the application after changing `.env`)*
 
+## 🎬 Video Generation Support
+
+CyberImage extends beyond static images, offering powerful **Text-to-Video (T2V)** and **Image-to-Video (I2V)** generation capabilities!
+
+### Features
+
+- **Text-to-Video (T2V):** Generate videos directly from text prompts using the main generation interface.
+- **Image-to-Video (I2V):** Bring your existing generated images to life by creating videos from them, initiated directly from the gallery.
+- **Supported Models:** Leverages advanced video models like `WanPipeline`, `WanImageToVideoPipeline`, and experimentally supports `LTXPipeline` (including GGUF variants).
+- **Seamless Integration:** Video jobs are handled by the same robust queue system as image jobs.
+- **Configuration:** Add and manage video models via the `.env` file as described in the **Managing Models** section above. The application identifies video models using the optional `type` parameter in the model configuration or by keywords in the model name (e.g., "t2v", "i2v").
+
+### Using Video Generation
+
+1.  **Text-to-Video:**
+    *   Select a T2V model (identified by name or `[Video]` tag) in the main model dropdown.
+    *   Enter your prompt.
+    *   Click "🎬 Generate Video".
+2.  **Image-to-Video:**
+    *   Go to the Gallery or view a single image.
+    *   Click the 🎥 (Generate Video) icon on the desired image.
+    *   A modal will appear; enter a video prompt and select an available I2V model.
+    *   Submit the job.
+
+Generated videos will appear in the gallery alongside images, with appropriate video player controls.
 
 ## 🤝 Contributing
 
@@ -377,7 +355,7 @@ After changing model configurations, restart the application to apply the change
 ## ⚖️ License
 
 <p>
-NetVentory is licensed under the GNU General Public License v3.0 (GPLv3).<br>
+CyberImage is licensed under the GNU General Public License v3.0 (GPLv3).<br>
 <em>Free Software</em>
 </p>
 
