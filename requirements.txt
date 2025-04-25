@@ -11,6 +11,7 @@ coverage==7.6.12
 diffusers
 torchvision
 ftfy
+gguf
 imageio-ffmpeg
 imageio
 filelock==3.17.0

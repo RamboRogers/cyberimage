@@ -199,3 +199,22 @@ def get_queue(): # Handles GET /api/queue
 ## Database Considerations (Revised)
 - `jobs` table needs `settings['type']` reliably set.
 - Consider adding `media_type` ('image'/'video') to `images` table long-term.
+
+## Video Generation Issues
+- **LTX-Video Output Corruption:**
+  - Issue: Video output from LTX-Video model (T2V) was reported as corrupt (e.g., "green lines"), then distorted but recognizable figures.
+  - Investigation 1: Logs showed `DEBUG: Before export_to_video - frames type is not ndarray: <class 'list'>`.
+  - Root Cause 1: The `generate_text_to_video` function returned a list, but `export_to_video` expects NumPy array.
+  - Fix 1: Added NumPy conversion in `generator.py`. (Later removed)
+  - Investigation 2: Output still corrupt after Fix 1.
+  - Potential Root Cause 2a: Mismatch between dtypes used in `get_model` vs reference.
+  - Fix 2a: Modified `get_model` in `manager.py` to strictly use `torch.bfloat16`.
+  - Potential Root Cause 2b: Frames returned might be tensors, causing incorrect conversion.
+  - Fix 2b: Added debug logging in `generate_text_to_video` (`manager.py`) to inspect frame format.
+  - Investigation 3: Generation failed with `NameError: name 'Image' is not defined` in debug log.
+  - Root Cause 3: Missing `PIL.Image` import in `manager.py`.
+  - Fix 3: Added `from PIL import Image` to `manager.py`.
+  - Investigation 4: Removed explicit NumPy conversion from `generator.py` to align flow with reference. Video now visible but distorted.
+  - Potential Root Cause 4: Missing `negative_prompt`. Application default was `None` if empty, reference uses specific quality prompt.
+  - Fix 4: Modified `generate_text_to_video` in `manager.py` to use reference negative prompt (`"worst quality..."`) as default if none provided by user.
+  - Status: Fix 2a, Fix 2b (logging), Fix 3, Fix 4 implemented. Explicit conversion removed. Requires testing.

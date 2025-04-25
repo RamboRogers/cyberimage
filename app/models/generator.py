@@ -20,6 +20,22 @@ import uuid
 from datetime import datetime
 import numpy as np
 
+# --- Add LTX-Video GGUF Imports --- #
+from diffusers import LTXPipeline, LTXVideoTransformer3DModel
+try:
+    from diffusers.utils.import_utils import is_torch_available
+except ImportError:
+    from diffusers.utils import is_torch_available
+# Use GGUFQuantizationConfig directly if available, otherwise define a placeholder or adjust logic
+try:
+    from diffusers import GGUFQuantizationConfig
+except ImportError:
+    # Define a placeholder or handle the absence of GGUFQuantizationConfig
+    # This might require adjustments based on the diffusers version
+    GGUFQuantizationConfig = None
+    print("WARNING: diffusers.GGUFQuantizationConfig not found. GGUF loading might be affected.")
+# --- End LTX-Video GGUF Imports --- #
+
 class GenerationPipeline:
     """Handles the image generation process"""
 
@@ -303,9 +319,9 @@ class GenerationPipeline:
                             **core_settings
                         )
 
-                        # Check if frames generation failed or returned empty
-                        if frames is None or getattr(frames, 'size', 0) == 0:
-                            raise ValueError("T2V generation returned no frames or an empty result")
+                        # Check if frames generation failed or returned empty (Simplified Check)
+                        if frames is None or not hasattr(frames, '__len__') or len(frames) == 0:
+                            raise ValueError("T2V generation returned no valid frames")
 
                         # Save video
                         QueueManager.update_job_status(job_id, "processing", "Saving T2V video...")
@@ -321,19 +337,14 @@ class GenerationPipeline:
                         output_video_path = os.path.join(video_dir, file_name)
                         # --- End Path Generation --- #
 
-                        # --- DEBUG: Inspect frames before export ---
+                        # --- DEBUG: Inspect frames before export (REMOVED CONVERSION) ---
+                        print(f"DEBUG: Before export_to_video - frames type: {type(frames)}")
                         if isinstance(frames, np.ndarray):
-                            print(f"DEBUG: Before export_to_video - frames.shape: {frames.shape}")
-                            print(f"DEBUG: Before export_to_video - frames.dtype: {frames.dtype}")
-                            print(f"DEBUG: Before export_to_video - frames.min(): {frames.min()}")
-                            print(f"DEBUG: Before export_to_video - frames.max(): {frames.max()}")
-                            # --- Fix shape/channel issues ---
-                            if frames.ndim == 5 and frames.shape[0] == 1:
-                                frames = frames[0]  # Now (F, H, W, C)
-                                print(f"DEBUG: Squeezed frames.shape -> {frames.shape}")
-                            # NOTE: Removed explicit scaling/casting. Trusting export_to_video.
-                        else:
-                            print(f"DEBUG: Before export_to_video - frames type is not ndarray: {type(frames)}")
+                            print(f"DEBUG: Frames are ndarray. Shape: {frames.shape}, Dtype: {frames.dtype}")
+                        elif isinstance(frames, list) and len(frames) > 0:
+                            print(f"DEBUG: Frames are list. Length: {len(frames)}, First element type: {type(frames[0])}")
+                        elif torch.is_tensor(frames):
+                            print(f"DEBUG: Frames are tensor. Shape: {frames.shape}, Dtype: {frames.dtype}")
                         sys.stdout.flush()
                         # --- End DEBUG ---
 
@@ -383,9 +394,9 @@ class GenerationPipeline:
                             **core_settings # Pass filtered settings
                         )
 
-                        # Check if frames generation failed or returned empty
-                        if frames is None or getattr(frames, 'size', 0) == 0:
-                             raise ValueError("I2V generation returned no frames or an empty result")
+                        # Check if frames generation failed or returned empty (Simplified Check)
+                        if frames is None or not hasattr(frames, '__len__') or len(frames) == 0:
+                            raise ValueError("I2V generation returned no valid frames")
 
                         # Save video
                         QueueManager.update_job_status(job_id, "processing", "Saving I2V video...")
@@ -401,19 +412,14 @@ class GenerationPipeline:
                         output_video_path = os.path.join(video_dir, file_name)
                         # --- End Path Generation --- #
 
-                        # --- DEBUG: Inspect frames before export ---
+                        # --- DEBUG: Inspect frames before export (REMOVED CONVERSION) ---
+                        print(f"DEBUG: Before export_to_video (I2V) - frames type: {type(frames)}")
                         if isinstance(frames, np.ndarray):
-                            print(f"DEBUG: Before export_to_video (I2V) - frames.shape: {frames.shape}")
-                            print(f"DEBUG: Before export_to_video (I2V) - frames.dtype: {frames.dtype}")
-                            print(f"DEBUG: Before export_to_video (I2V) - frames.min(): {frames.min()}")
-                            print(f"DEBUG: Before export_to_video (I2V) - frames.max(): {frames.max()}")
-                            # --- Fix shape/channel issues ---
-                            if frames.ndim == 5 and frames.shape[0] == 1:
-                                frames = frames[0]
-                                print(f"DEBUG: Squeezed frames.shape -> {frames.shape}")
-                            # NOTE: Removed explicit scaling/casting. Trusting export_to_video.
-                        else:
-                            print(f"DEBUG: Before export_to_video (I2V) - frames type is not ndarray: {type(frames)}")
+                            print(f"DEBUG: Frames are ndarray (I2V). Shape: {frames.shape}, Dtype: {frames.dtype}")
+                        elif isinstance(frames, list) and len(frames) > 0:
+                            print(f"DEBUG: Frames are list (I2V). Length: {len(frames)}, First element type: {type(frames[0])}")
+                        elif torch.is_tensor(frames):
+                             print(f"DEBUG: Frames are tensor (I2V). Shape: {frames.shape}, Dtype: {frames.dtype}")
                         sys.stdout.flush()
                         # --- End DEBUG ---
 

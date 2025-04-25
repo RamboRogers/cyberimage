@@ -906,7 +906,9 @@ span.spin {
     border-radius: 8px;
 }
 
-.gallery-item img {
+.gallery-item img,
+.gallery-item video {
+    display: block;
     width: 100%;
     height: 300px;
     object-fit: cover;
@@ -920,6 +922,7 @@ span.spin {
         rgba(57, 255, 20, 0.1));
     background-size: 20px 20px;
     animation: moveStripes 1s linear infinite;
+    border-bottom: 1px solid var(--neon-green-dim);
 }
 
 @keyframes moveStripes {
@@ -2000,3 +2003,25 @@ footer .branding a:hover::after {
     opacity: 1;
 }
 /* --- End Gallery Video Item Indicator --- */
+
+/* --- Settings Show/Hide Transitions --- */
+.input-group.image-only-setting,
+.input-group.video-only-setting {
+    transition: opacity 0.3s ease, max-height 0.3s ease, margin 0.3s ease, padding 0.3s ease;
+    max-height: 300px; /* Adjust as needed */
+    overflow: hidden;
+    opacity: 1;
+    margin-bottom: 1rem; /* Keep original margin */
+}
+
+.input-group.image-only-setting.hidden,
+.input-group.video-only-setting.hidden {
+    opacity: 0;
+    max-height: 0;
+    margin-top: 0;
+    margin-bottom: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    border: none;
+}
+/* --- End Settings Show/Hide --- */

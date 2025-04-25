@@ -62,23 +62,48 @@
         <section class="gallery-content">
             <div class="gallery-grid" data-view="grid">
                 {% for image in images %}
-                <div class="gallery-item" data-image-id="{{ image.id }}">
+                {# Metadata is now a dictionary, access directly #}
+                {% set media_type = image.metadata.get('type', 'image') %}
+                {% set is_video = (media_type == 'video') %}
+                {# Retain model_id for display, prompt for alt/copy #}
+                {% set model_id = image.metadata.get('model_id', 'Unknown') %}
+                {% set prompt = image.metadata.get('prompt', '') %}
+
+                {# Update data attributes for consistency #}
+                <div class="gallery-item" data-media-id="{{ image.id }}" data-media-type="{{ media_type }}">
+                    {# Render video or image based on is_video flag #}
+                    {% if is_video %}
                     <div class="item-preview">
+                        <video src="{{ url_for('api.get_video', video_id=image.id) }}" controls muted loop preload="metadata" class="video-preview"></video>
+                        <div class="quick-actions">
+                            <button class="action-copy-prompt" title="Copy Prompt" data-prompt="{{ prompt }}">📋</button>
+                            {# No generate video button for videos #}
+                            <button class="action-download" title="Download Video">⬇️</button>
+                            <button class="action-delete" title="Delete Video">🗑️</button>
+                        </div>
+                    </div>
+                    {% else %}
+                    <div class="item-preview">
+                        {# Use the variable 'prompt' for alt text #}
                         <img data-src="{{ url_for('api.get_image', image_id=image.id) }}"
-                             alt="{{ image.prompt[:50] }}..."
+                             alt="{{ prompt[:50] }}..."
                              loading="lazy">
                         <div class="quick-actions">
-                            <button class="action-copy-prompt" title="Copy Prompt">📋</button>
-                            <button class="action-favorite" title="Add to Favorites">⭐</button>
-                            <button class="action-generate-video" title="Generate Video from Image">🎥</button>
-                            <button class="action-download" title="Download">⬇️</button>
+                            {# Use the variable 'prompt' for copy button #}
+                            <button class="action-copy-prompt" title="Copy Prompt" data-prompt="{{ prompt }}">📋</button>
+                            {# Use the variable 'prompt' for generate video button #}
+                            <button class="action-generate-video" title="Generate Video from Image" data-image-id="{{ image.id }}" data-image-prompt="{{ prompt }}">🎥</button>
+                            <button class="action-download" title="Download Image">⬇️</button>
                             <button class="action-delete" title="Delete Image">🗑️</button>
                         </div>
                     </div>
+                    {% endif %}
                     <div class="item-details">
-                        <div class="prompt-preview">{{ image.prompt }}</div>
+                        {# Use the variable 'prompt' for preview #}
+                        <div class="prompt-preview">{{ prompt }}</div>
                         <div class="metadata">
-                            <span class="model-info">{{ image.model_id }}</span>
+                            {# Use the variable 'model_id' for display #}
+                            <span class="model-info">{{ model_id }}</span>
                             <span class="generation-time"
                                   title="{{ image.created_at.strftime('%Y-%m-%d %H:%M:%S %Z') }}">
                                 {{ image.created_at.strftime('%b %d, %I:%M %p') }}

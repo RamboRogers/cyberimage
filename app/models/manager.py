@@ -16,6 +16,7 @@ from flask import current_app
 import time
 import threading
 from pathlib import Path
+from PIL import Image
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -27,6 +28,22 @@ from diffusers import AutoencoderKLWan, WanImageToVideoPipeline
 from diffusers.utils import export_to_video, load_image
 from transformers import CLIPVisionModel
 # --- End Video Generation Imports ---
+
+# --- Add LTX-Video GGUF Imports --- #
+from diffusers import LTXPipeline, LTXVideoTransformer3DModel
+try:
+    from diffusers.utils.import_utils import is_torch_available
+except ImportError:
+    from diffusers.utils import is_torch_available
+# Use GGUFQuantizationConfig directly if available, otherwise define a placeholder or adjust logic
+try:
+    from diffusers import GGUFQuantizationConfig
+except ImportError:
+    # Define a placeholder or handle the absence of GGUFQuantizationConfig
+    # This might require adjustments based on the diffusers version
+    GGUFQuantizationConfig = None
+    print("WARNING: diffusers.GGUFQuantizationConfig not found. GGUF loading might be affected.")
+# --- End LTX-Video GGUF Imports --- #
 
 class ModelLoadError(Exception):
     """Raised when a model fails to load"""
@@ -391,8 +408,47 @@ class ModelManager:
 
                     return pipe
 
+                # --- ADDED: Handle LTX GGUF T2V Model First --- #
+                if model_config.get("source") == "gguf_url" and model_type == "t2v":
+                    logger.info(f"Loading LTX-Video GGUF model: {model_key}")
+                    if GGUFQuantizationConfig is None:
+                        raise ModelLoadError("GGUFQuantizationConfig is required for LTX GGUF models but was not found in diffusers.")
+
+                    gguf_files = list(Path(model_path).glob("*.gguf"))
+                    if not gguf_files:
+                        raise ModelLoadError(f"No .gguf file found in model directory: {model_path}")
+                    if len(gguf_files) > 1:
+                        logger.warning(f"Multiple .gguf files found in {model_path}, using the first one: {gguf_files[0]}")
+
+                    gguf_file_path = gguf_files[0]
+                    logger.info(f"Loading LTX Transformer from GGUF: {gguf_file_path}")
+
+                    # Determine compute dtype based on availability
+                    # compute_dtype = torch.bfloat16 if is_torch_available() else torch.float16
+                    # --- Align with Reference Code: Use bfloat16 directly ---
+                    dtype_to_use = torch.bfloat16
+                    logger.info(f"Using dtype: {dtype_to_use}")
+                    # --- End Alignment ---
+                    quant_config = GGUFQuantizationConfig(compute_dtype=dtype_to_use)
+
+                    transformer = LTXVideoTransformer3DModel.from_single_file(
+                        str(gguf_file_path),
+                        quantization_config=quant_config,
+                        torch_dtype=dtype_to_use, # Use aligned dtype for loading
+                    )
+
+                    logger.info("Loading LTX Pipeline base...")
+                    # Load the base LTXPipeline first
+                    pipe = LTXPipeline.from_pretrained(
+                        "Lightricks/LTX-Video", # Base pipeline definition
+                        transformer=transformer,
+                        torch_dtype=dtype_to_use, # Use aligned dtype for pipeline
+                        local_files_only=False # Allow downloading other components if needed
+                    )
+                    pipe = apply_memory_optimizations(pipe) # Apply optimizations
+                    logger.info(f"Loaded LTX GGUF model ({model_key}) with CPU offloading")
                 # --- Handle Video Model Type --- #
-                if model_type == "i2v":
+                elif model_type == "i2v":
                     logger.info(f"Loading Image-to-Video (I2V) model: {model_key}")
                     # Determine dtype for video model (needs careful consideration)
                     # Using float32 for VAE/Image Encoder as per example, bfloat16 for pipeline
@@ -807,118 +863,124 @@ class ModelManager:
             # Enhanced logging
             model_info = AVAILABLE_MODELS.get(model_key, {})
             model_desc = model_info.get("description", "Unknown model")
+            model_type = model_info.get("type", "unknown") # Get model type for logic
             print(f"\n🎬 GENERATING T2V VIDEO with model: {model_key} - {model_desc}")
-            print(f"   • Text Prompt: {prompt[:100]}" + ('...' if len(prompt) > 100 else ''))
+            print(f"   • Text Prompt: {prompt[:100]}" + ('... ' if len(prompt) > 100 else ''))
 
-            # Log key parameters
+            # Log key parameters from kwargs or defaults
             guidance = kwargs.get("guidance_scale", 7.0)
             steps = kwargs.get("num_inference_steps", 50)
-            num_frames = kwargs.get("num_frames", 17)
-            print(f"   • Parameters: Steps={steps}, Guidance={guidance}, Frames={num_frames}")
+            num_frames = kwargs.get("num_frames", 161) # Default from LTX example
+            width = kwargs.get("width", 704) # Default from LTX example
+            height = kwargs.get("height", 480) # Default from LTX example
+            # --- Use default negative prompt if none provided --- #
+            provided_negative_prompt = kwargs.get("negative_prompt", "")
+            default_negative_prompt = "worst quality, inconsistent motion, blurry, jittery, distorted"
+            negative_prompt = provided_negative_prompt if provided_negative_prompt else default_negative_prompt
+            # --- End default negative prompt --- #
+
+            print(f"   • Parameters: Steps={steps}, Guidance={guidance}, Frames={num_frames}, Size={width}x{height}")
+            if negative_prompt:
+                 print(f"   • Negative Prompt: {negative_prompt[:100]}" + ('... ' if len(negative_prompt) > 100 else ''))
             sys.stdout.flush()
             # End enhanced logging
 
-            # 1. Get model (should be a T2V model loaded by get_model)
+            # 1. Get model (could be LTXPipeline, WanPipeline, etc.)
             pipe = self.get_model(model_key)
             if pipe is None:
                 raise ModelLoadError(f"Failed to get T2V model {model_key}")
 
-            # Verify pipeline type (optional but good practice)
-            # For T2V like i2vgen-xl, it might be loaded as a generic DiffusionPipeline
-            if not hasattr(pipe, '__call__'): # Basic check if it's callable
-                 logger.warning(f"Model {model_key} might not be a callable pipeline. Type: {type(pipe).__name__}. Attempting anyway.")
-
-            # 2. Prepare arguments (similar to generate_image, but may need video-specific args like num_frames)
+            # 2. Prepare arguments based on pipeline type
             pipe_args = {
                 "prompt": prompt,
-                "guidance_scale": kwargs.get("guidance_scale", 7.0), # T2V might use different defaults
-                "num_inference_steps": kwargs.get("num_inference_steps", 50), # T2V often needs more steps
-                "num_frames": kwargs.get("num_frames", 17), # Use provided frames, default to 17 (valid)
-                # Add height/width if configurable for the T2V model, otherwise pipeline defaults
+                "guidance_scale": guidance,
+                "num_inference_steps": steps,
+                "num_frames": num_frames,
+                "width": width,
+                "height": height,
+                "negative_prompt": negative_prompt # Use the potentially defaulted negative_prompt
             }
-            if "height" in kwargs:
-                pipe_args["height"] = kwargs["height"]
-            if "width" in kwargs:
-                pipe_args["width"] = kwargs["width"]
 
             # Log generation start
             print(f"\n🚀 Starting T2V generation with {model_key} ({pipe_args['num_inference_steps']} steps)")
             sys.stdout.flush()
 
             # 3. Call the pipeline
-            # Assuming the pipeline returns frames in an 'images' or 'frames' attribute.
-            # We'll check for 'frames' first, then fall back to 'images'.
-            print(f"DEBUG: Calling T2V pipeline {model_key}...") # DEBUG
             result = pipe(**pipe_args)
-            print(f"DEBUG: T2V pipeline call completed.") # DEBUG
-            print(f"DEBUG: Type of result: {type(result)}") # DEBUG
-            print(f"DEBUG: Attributes of result: {dir(result)}") # DEBUG
 
-            output_frames = None # Initialize to None
+            # --- DEBUG: Log result type and attributes ---
+            logger.debug(f"T2V pipe result type: {type(result)}")
+            if hasattr(result, '__dict__'):
+                logger.debug(f"T2V pipe result attributes: {result.__dict__.keys()}")
+            elif hasattr(result, 'keys'):
+                 logger.debug(f"T2V pipe result keys: {result.keys()}")
 
-            # --- Adjust for WanPipeline output format --- #
             if hasattr(result, 'frames'):
-                print("DEBUG: Found 'frames' attribute in result.") # DEBUG
-                # Expecting nested structure like [[frames_array]] based on snippet/logs
-                if isinstance(result.frames, list) and len(result.frames) > 0:
-                    # Extract the inner element, which should be the NumPy array/Tensor
+                 logger.debug(f"T2V pipe result.frames type: {type(result.frames)}")
+                 if isinstance(result.frames, (list, np.ndarray)) and hasattr(result.frames, '__len__'):
+                     logger.debug(f"T2V pipe result.frames length: {len(result.frames)}")
+                     if len(result.frames) > 0:
+                        logger.debug(f"T2V pipe result.frames[0] type: {type(result.frames[0])}")
+                        if hasattr(result.frames[0], 'shape'):
+                             logger.debug(f"T2V pipe result.frames[0] shape: {result.frames[0].shape}")
+            # --- END DEBUG ---
+
+            # 4. Extract frames based on expected output structure (Aligned with LTX reference)
+            output_frames = None
+            if hasattr(result, 'frames'):
+                # Reference code uses result.frames[0] directly
+                # Check if it's a non-empty list/array first
+                if isinstance(result.frames, (list, tuple, np.ndarray)) and len(result.frames) > 0:
                     output_frames = result.frames[0]
-                    print(f"DEBUG: Extracted frames using result.frames[0]. Type: {type(output_frames)}") # DEBUG
+                    logger.info(f"Extracted frames from result.frames[0] (type: {type(output_frames)})")
+                elif result.frames is not None:
+                     # Handle cases where result.frames might be the frames directly
+                     output_frames = result.frames
+                     logger.warning(f"Using result.frames directly as output (type: {type(output_frames)}). Structure might differ from expected result.frames[0].")
                 else:
-                    # Handle unexpected structure if result.frames is not a list or is empty
-                    print(f"DEBUG: result.frames found, but not the expected nested list structure. Type: {type(result.frames)}") # DEBUG
-                    output_frames = result.frames # Fallback to using result.frames directly
-            elif hasattr(result, 'images'): # Fallback check (less likely for WanPipeline)
-                print("DEBUG: Found 'images' attribute in result.") # DEBUG
+                    logger.error("T2V result has 'frames' attribute, but it is empty or None.")
+            elif hasattr(result, 'images'): # Fallback for older/different pipelines
                 output_frames = result.images
-                print(f"DEBUG: Type of result.images: {type(output_frames)}") # DEBUG
+                logger.warning(f"T2V result missing 'frames', falling back to 'images' attribute.")
             else:
-                 print("DEBUG: Neither 'frames' nor 'images' attribute found.") # DEBUG
-                 raise ModelGenerationError(f"T2V pipeline {model_key} did not return 'frames' or 'images'")
-            # --- End Format Adjustment --- #
+                 logger.error(f"T2V pipeline {model_key} result object missing 'frames' and 'images' attributes.")
+                 raise ModelGenerationError(f"T2V pipeline {model_key} did not return expected output structure.")
 
-            # Ensure output is a list or compatible array
+            # Check if extraction failed
             if output_frames is None:
-                print("DEBUG: output_frames is None after attempting extraction.") # DEBUG
-                raise ModelGenerationError(f"Failed to extract frames/images from T2V pipeline {model_key} result.")
+                logger.error(f"Failed to extract frames from T2V pipeline result. Result object: {result}")
+                raise ModelGenerationError(f"Failed to extract valid frames from T2V pipeline {model_key} result.")
 
-            # Check if conversion to list is needed (e.g., if NumPy array)
-            # export_to_video can handle NumPy arrays directly, so conversion might not be strictly necessary,
-            # but checking and logging the type is useful.
-            if not isinstance(output_frames, list):
-                 print(f"DEBUG: output_frames is not a list. Type: {type(output_frames)}") # DEBUG
-                 # We can log this, but export_to_video should handle NumPy arrays
-                 # No explicit conversion needed here unless export fails later.
+            # --- Added DEBUG: Inspect output_frames before returning --- #
+            if output_frames is not None and hasattr(output_frames, '__len__') and len(output_frames) > 0:
+                first_frame = output_frames[0]
+                logger.debug(f"T2V generate_text_to_video: output_frames type: {type(output_frames)}")
+                logger.debug(f"T2V generate_text_to_video: first_frame type: {type(first_frame)}")
+                if isinstance(first_frame, torch.Tensor):
+                    logger.debug(f"T2V generate_text_to_video: first_frame tensor dtype: {first_frame.dtype}")
+                    logger.debug(f"T2V generate_text_to_video: first_frame tensor shape: {first_frame.shape}")
+                    # Log min/max ONLY if it's a float tensor to avoid issues with other types
+                    if first_frame.dtype.is_floating_point:
+                        logger.debug(f"T2V generate_text_to_video: first_frame tensor min/max: {first_frame.min()}, {first_frame.max()}")
+                elif isinstance(first_frame, Image.Image):
+                    logger.debug(f"T2V generate_text_to_video: first_frame PIL mode: {first_frame.mode}")
+                    logger.debug(f"T2V generate_text_to_video: first_frame PIL size: {first_frame.size}")
             else:
-                print(f"DEBUG: output_frames is a list with {len(output_frames)} items.") # DEBUG
+                logger.debug("T2V generate_text_to_video: output_frames is None or empty.")
+            # --- End DEBUG --- #
 
-            # Add check for content type within the list/array
-            if hasattr(output_frames, '__len__') and len(output_frames) > 0:
-                 # Check the type of the first element
-                first_item_type = type(output_frames[0])
-                print(f"DEBUG: Type of first item in output_frames collection: {first_item_type}")
-                # Check if items are PIL Images (export_to_video also accepts NumPy/Tensor)
-                try:
-                    from PIL import Image
-                    # Check if the first element is a PIL image OR a NumPy array (common types)
-                    if not isinstance(output_frames[0], (Image.Image, np.ndarray)):
-                        # If it's a tensor, export_to_video might handle it, but log a warning
-                        if torch.is_tensor(output_frames[0]):
-                             logger.warning(f"Items in the output frame collection are Tensors (shape: {output_frames[0].shape}). export_to_video should handle this.")
-                        else:
-                            logger.warning(f"Items in the output frame collection might not be PIL Images or NumPy arrays (type: {first_item_type}). Export might fail.")
-                except ImportError:
-                    pass # PIL not available, skip PIL check
-                except Exception as check_err:
-                     logger.warning(f"Could not reliably check frame item type: {check_err}")
-
-            # --- Get number of frames correctly --- #
+            # Get number of frames correctly (more robust check)
             num_generated_frames = 0
-            if hasattr(output_frames, '__len__'):
-                 num_generated_frames = len(output_frames)
-            else:
-                logger.warning(f"Could not determine length of output_frames (type: {type(output_frames)}). Assuming 1 frame.")
-                num_generated_frames = 1
+            try:
+                # Try standard len first
+                num_generated_frames = len(output_frames)
+            except TypeError:
+                # Handle cases like single tensors that might not have len()
+                if hasattr(output_frames, 'shape'):
+                    num_generated_frames = output_frames.shape[0] # Assume first dimension is frames
+                else:
+                    logger.warning(f"Could not determine length/frame count from output_frames (type: {type(output_frames)}). Assuming 1 frame.")
+                    num_generated_frames = 1 # Or handle as error if length is critical
 
             print(f"✅ Successfully generated {num_generated_frames} T2V frames with model {model_key}")
             sys.stdout.flush()

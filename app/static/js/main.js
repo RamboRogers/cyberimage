@@ -80,6 +80,8 @@ function initializeGalleryHandling() {
     const galleryGrid = document.querySelector('.gallery-grid');
     const modal = document.getElementById('fullscreenModal');
     const modalImage = document.getElementById('modalImage');
+    // ADD: Get reference to a video element in the modal
+    const modalVideo = document.getElementById('modalVideo'); // Assumes <video id="modalVideo"> exists in index.html
     const modelInfo = document.getElementById('modelInfo');
     const promptInfo = document.getElementById('promptInfo');
     const settingsInfo = document.getElementById('settingsInfo');
@@ -88,53 +90,62 @@ function initializeGalleryHandling() {
     const deleteBtn = document.getElementById('deleteImage'); // Get delete button for fullscreen modal
     const closeBtn = modal?.querySelector('.action-close'); // Safely query close button
 
-    let currentImageId = null;
+    let currentMediaId = null; // Changed from currentImageId
+    let currentMediaType = 'image'; // Added to track type
 
     // Define hideModal within the scope where modal is defined
     function hideModal() {
         if (modal) {
             modal.style.display = 'none';
             document.body.style.overflow = '';
-            currentImageId = null;
+            // ADD: Pause video when closing modal
+            if (modalVideo && !modalVideo.paused) {
+                modalVideo.pause();
+                modalVideo.currentTime = 0; // Optional: reset time
+            }
+            // END ADD
+            currentMediaId = null;
+            currentMediaType = 'image';
         }
     }
 
-    function showModal(imageElement) {
-        if (!modal || !modalImage || !modelInfo || !promptInfo || !settingsInfo) {
+    // Show fullscreen modal for image or video
+    function showFullscreenMedia(element) { // Renamed from showModal
+        if (!modal || !modalImage || !modalVideo || !modelInfo || !promptInfo || !settingsInfo || !downloadBtn) {
             console.error("Fullscreen modal elements not found.");
             return;
         }
-        const galleryItem = imageElement.closest('.gallery-item');
+        const galleryItem = element.closest('.gallery-item');
         if (!galleryItem) return;
 
-        // Support both data-media-id (newer) and data-image-id (older gallery items)
-        currentImageId = galleryItem.dataset.mediaId || galleryItem.dataset.imageId;
-        if (!currentImageId) {
+        currentMediaId = galleryItem.dataset.mediaId;
+        currentMediaType = galleryItem.dataset.mediaType || 'image'; // Get type
+
+        if (!currentMediaId) {
             console.error("No media ID found on gallery item:", galleryItem);
             return;
         }
 
-        // Determine media type - default to 'image' for backward compatibility
-        const mediaType = galleryItem.dataset.mediaType || 'image';
-
-        // Hide image/video elements initially
+        // Reset and hide elements
         modalImage.style.display = 'none';
-        // Need a video element reference if displaying videos in this modal
-        // const modalVideo = document.getElementById('modalVideo'); // Example ID
-        // if (modalVideo) modalVideo.style.display = 'none';
+        modalImage.src = '';
+        modalVideo.style.display = 'none';
+        modalVideo.src = '';
+        if (!modalVideo.paused) modalVideo.pause(); // Pause if playing
 
-        if (mediaType === 'video') {
-            // If displaying video in fullscreen modal, update logic here
-            console.warn("Fullscreen modal display for video not implemented yet.");
-            // Example: Set video src, show video element, hide image element
-            // if (modalVideo) {
-            //     modalVideo.src = `/api/get_video/${currentImageId}`;
-            //     modalVideo.style.display = 'block';
-            // }
-             // For now, show placeholder or just the prompt info if video display isn't ready
-             modalImage.style.display = 'none'; // Ensure image is hidden
-        } else {
-            modalImage.src = imageElement.src;
+        // Set download button text and action based on type
+        const downloadButtonText = currentMediaType === 'video' ? 'Download Video' : 'Download Image';
+        downloadBtn.innerHTML = `<span class="icon">⬇️</span> ${downloadButtonText}`;
+        downloadBtn.dataset.mediaId = currentMediaId; // Store ID for download handler
+        downloadBtn.dataset.mediaType = currentMediaType; // Store type for download handler
+
+        // Display correct element (image or video)
+        if (currentMediaType === 'video') {
+            modalVideo.src = `/api/get_video/${currentMediaId}`;
+            modalVideo.style.display = 'block';
+            modalVideo.load();
+        } else { // Image
+            modalImage.src = `/api/get_image/${currentMediaId}`;
             modalImage.style.display = 'block';
         }
 
@@ -146,34 +157,45 @@ function initializeGalleryHandling() {
         promptInfo.textContent = 'Loading...';
         settingsInfo.textContent = 'Loading...';
 
-        // Fetch image metadata (needs adjustment for video metadata?)
-        // Assuming metadata endpoint works for both or need separate video endpoint
-        fetch(`/api/image/${currentImageId}/metadata`) // Using image metadata endpoint for now
+        // Fetch metadata (assuming universal endpoint)
+        fetch(`/api/image/${currentMediaId}/metadata`) // Still using image endpoint, needs verification
             .then(response => {
-                if (!response.ok) {
-                    throw new Error(response.status === 404 ? 'Metadata not found' : `HTTP error ${response.status}`);
-                }
+                if (!response.ok) throw new Error(`HTTP error ${response.status}`);
                 return response.json();
             })
             .then(data => {
                 modelInfo.textContent = data.model_id || 'Not available';
                 promptInfo.textContent = data.prompt || data.settings?.prompt || 'Not available';
-
                 const settings = Object.entries(data.settings || {})
+                    .filter(([key]) => key !== 'prompt' && key !== 'negative_prompt') // Filter out prompts
                     .map(([key, value]) => `${key}: ${JSON.stringify(value)}`)
                     .join('\n');
                 settingsInfo.textContent = settings || 'Not available';
             })
             .catch(error => {
                 console.error('Error fetching media metadata:', error);
-                // Set fallback content when metadata can't be fetched
                 modelInfo.textContent = 'Metadata unavailable';
                 promptInfo.textContent = 'Metadata unavailable';
                 settingsInfo.textContent = 'Metadata unavailable';
             });
     }
 
-    // Copy prompt functionality (ensure copyPromptBtn exists)
+    // Event delegation for opening the fullscreen modal
+    if (galleryGrid) {
+        galleryGrid.addEventListener('click', (e) => {
+            const previewElement = e.target.closest('.item-preview img, .item-preview video');
+            if (previewElement) {
+                // Prevent triggering if a button inside quick-actions was clicked
+                if (!e.target.closest('.quick-actions')) {
+                   showFullscreenMedia(previewElement);
+                }
+            }
+        });
+    } else {
+        console.error("Gallery grid not found for event delegation.");
+    }
+
+    // Copy prompt functionality (ensure copyPromptBtn exists) - This is for the modal
     if (copyPromptBtn) {
         copyPromptBtn.addEventListener('click', () => {
             const promptText = promptInfo.textContent;
@@ -223,20 +245,33 @@ function initializeGalleryHandling() {
         });
     }
 
-    // Download functionality (ensure downloadBtn exists)
+    // Download functionality for the MODAL (ensure downloadBtn exists)
     if (downloadBtn) {
         downloadBtn.addEventListener('click', async () => {
-            if (!currentImageId) return;
-            // Support both attribute types (mediaId/imageId) when querying
-            const galleryItem = document.querySelector(`[data-media-id="${currentImageId}"]`) ||
-                               document.querySelector(`[data-image-id="${currentImageId}"]`);
-            const isVideo = galleryItem?.dataset.mediaType === 'video';
-            const downloadUrl = isVideo ? `/api/get_video/${currentImageId}` : `/api/get_image/${currentImageId}`;
-            const filename = `cyberimage-${currentImageId}.${isVideo ? 'mp4' : 'png'}`;
-            const buttonText = isVideo ? 'Download Video' : 'Download Image';
+            // Retrieve media ID and type from the button's dataset
+            const mediaId = downloadBtn.dataset.mediaId;
+            const mediaType = downloadBtn.dataset.mediaType;
+
+            if (!mediaId || !mediaType) {
+                 console.error("Missing media ID or type for download.");
+                 return;
+            }
+
+            const downloadUrl = mediaType === 'video' ? `/api/get_video/${mediaId}` : `/api/get_image/${mediaId}`;
+            const filename = `cyberimage-${mediaId}.${mediaType === 'video' ? 'mp4' : 'png'}`;
+
+            // Keep original button text
+            const originalButtonHtml = downloadBtn.innerHTML;
 
             try {
+                // Indicate download start
+                downloadBtn.innerHTML = `<span class="icon">⏳</span> Downloading...`;
+                downloadBtn.disabled = true;
+
                 const response = await fetch(downloadUrl);
+                if (!response.ok) {
+                    throw new Error(`Failed to fetch media: ${response.statusText}`);
+                }
                 const blob = await response.blob();
                 const url = window.URL.createObjectURL(blob);
                 const a = document.createElement('a');
@@ -247,74 +282,30 @@ function initializeGalleryHandling() {
                 document.body.removeChild(a);
                 window.URL.revokeObjectURL(url);
 
-                const originalText = downloadBtn.innerHTML;
-                downloadBtn.innerHTML = '<span class="icon">✓</span>Downloaded!';
-                setTimeout(() => { downloadBtn.innerHTML = `<span class="icon">⬇️</span>${buttonText}`; }, 2000);
+                // Restore button after a short delay
+                 setTimeout(() => {
+                    downloadBtn.innerHTML = originalButtonHtml;
+                    downloadBtn.disabled = false;
+                 }, 1000); // Restore after 1 second
+
             } catch (error) {
-                console.error('Error downloading media:', error);
-                downloadBtn.innerHTML = '<span class="icon">❌</span>Error';
-                setTimeout(() => { downloadBtn.innerHTML = `<span class="icon">⬇️</span>${buttonText}`; }, 2000);
+                console.error('Download failed:', error);
+                 downloadBtn.innerHTML = `<span class="icon">❌</span> Failed`;
+                 // Restore original button after a longer delay on error
+                 setTimeout(() => {
+                    downloadBtn.innerHTML = originalButtonHtml;
+                    downloadBtn.disabled = false;
+                 }, 3000);
             }
         });
     }
 
-    // Delete functionality for fullscreen modal (ensure deleteBtn exists)
-    if (deleteBtn) {
-        deleteBtn.addEventListener('click', () => {
-            if (!currentImageId) return;
-            const confirmModal = document.getElementById('deleteConfirmModal');
-            if (confirmModal) {
-                confirmModal.style.display = 'block';
-                const confirmButton = document.getElementById('confirmDelete');
-                confirmButton.onclick = async () => {
-                    try {
-                        // Support both attribute types (mediaId/imageId) when querying
-                        const galleryItem = document.querySelector(`[data-media-id="${currentImageId}"]`) ||
-                                          document.querySelector(`[data-image-id="${currentImageId}"]`);
-                        const isVideo = galleryItem?.dataset.mediaType === 'video';
-                        const deleteUrl = isVideo ? `/api/video/${currentImageId}` : `/api/image/${currentImageId}`;
-
-                        const response = await fetch(deleteUrl, { method: 'DELETE' });
-                        if (response.ok) {
-                            showMainFeedback('Media deleted successfully', 'success');
-                            hideModal();
-                            galleryItem?.remove();
-                        } else {
-                            const errorData = await response.json();
-                            showMainFeedback(`Error deleting media: ${errorData.message}`, 'error');
-                        }
-                    } catch (error) {
-                        showMainFeedback(`Error deleting media: ${error.message}`, 'error');
-                    } finally {
-                        confirmModal.style.display = 'none';
-                    }
-                };
-            }
-        });
-    }
-
-    // Close modal on button click (ensure closeBtn exists)
+    // Close button for the MODAL (ensure closeBtn exists)
     if (closeBtn) {
         closeBtn.addEventListener('click', hideModal);
     }
-
-    // Handle gallery item clicks (for opening fullscreen modal)
-    if (galleryGrid) {
-        galleryGrid.addEventListener('click', (e) => {
-             if (e.target.closest('.quick-actions button') || e.target.closest('.item-details a')) {
-                return;
-            }
-
-            const galleryItem = e.target.closest('.gallery-item');
-            if (!galleryItem) return;
-
-            const mediaElement = galleryItem.querySelector('img, video');
-            if (mediaElement) {
-                showModal(mediaElement);
-            }
-        });
-    }
 }
+
 // --- End Added Back Missing Function Definitions --- //
 
 // Timer for tracking generation duration
@@ -367,61 +358,44 @@ class GenerationTimer {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-    initializeModels();
-    initializeModalHandling();
-    initializeGalleryHandling();
-    initializeGenerationForm();
-    initializeInfiniteScroll();
     initializeMobileNav();
-    initializeQueueStatusIndicator();
-    initializeEnhancedPromptUI();
-    initializeKeepPromptCheckbox();
-    initializeCopyPromptButtons();
-    initializeVideoGenerationModal();
+    initializeModels().then(() => {
+        // Only initialize form elements after models are loaded
+        if (document.getElementById('generate-form')) {
+            initializeGenerationForm();
+            initializeModelChange(); // Ensure model change handler is set up
+            initializeKeepPromptCheckbox();
+            initializeEnhancedPromptUI(); // For enrich feature
+        }
+    }).catch(error => {
+        console.error("Failed to initialize models:", error);
+        // Display error to user if needed
+    });
 
-    // Add direct event listener for copy button as a fallback
-    const copyPromptBtn = document.getElementById('copyPrompt');
-    if (copyPromptBtn) {
-        console.log('Adding direct event listener to copy button');
-        copyPromptBtn.addEventListener('click', function(e) {
-            e.preventDefault();
-            e.stopPropagation();
-            console.log('Copy button clicked directly');
-            const promptInfo = document.getElementById('promptInfo');
-            if (promptInfo) {
-                const promptText = promptInfo.textContent;
-                if (promptText && promptText !== 'Loading...' && promptText !== 'Error loading details') {
-                    // Create a temporary textarea element to copy from
-                    const textarea = document.createElement('textarea');
-                    textarea.value = promptText;
-                    textarea.style.position = 'fixed';
-                    textarea.style.opacity = '0';
-                    document.body.appendChild(textarea);
-                    textarea.select();
-
-                    try {
-                        const success = document.execCommand('copy');
-                        if (success) {
-                            console.log('Text copied via execCommand');
-                            this.innerHTML = '<span class="icon">✓</span>Copied!';
-                        } else {
-                            console.warn('execCommand copy failed');
-                            this.innerHTML = '<span class="icon">❌</span>Failed';
-                        }
-                    } catch (err) {
-                        console.error('Copy error:', err);
-                        this.innerHTML = '<span class="icon">❌</span>Error';
-                    }
-
-                    document.body.removeChild(textarea);
-
-                    setTimeout(() => {
-                        this.innerHTML = '<span class="icon">📋</span>Copy Prompt';
-                    }, 2000);
-                }
-            }
-        });
+    if (document.querySelector('.gallery-grid')) {
+        initializeGalleryHandling(); // Sets up modal logic
+        initializeGalleryItemActions(); // ADDED: Sets up delegated actions for items
+        initializeInfiniteScroll(); // Make sure this runs after gallery setup
+        initializeVideoHoverPlay(); // ADDED: Enable hover-play for videos
     }
+
+    if (document.getElementById('queue-status-text')) {
+        initializeQueueStatusIndicator(); // For queue status in nav
+        initializeQueueStatusPolling(); // Start polling queue status
+    }
+
+    // Initialize modal handling globally
+    initializeModalHandling();
+
+    // Initialize Video Generation Modal specific logic
+    if (document.getElementById('videoGenModal')) {
+        initializeVideoGenerationModal();
+    }
+
+    // DEPRECATED - Replaced by initializeGalleryItemActions
+    // if (document.querySelector('.gallery-grid')) {
+    //     initializeCopyPromptButtons(); // Setup copy buttons for existing items initially
+    // }
 });
 
 // Initialize mobile navigation
@@ -522,149 +496,159 @@ async function initializeModels() {
     }
 }
 
-// Reverted handleModelChange to use passed modelsDataStore or global availableImageModels
-function handleModelChange(modelsDataStore) { // Accept modelsDataStore
+// Updated handleModelChange to adjust UI based on model type (T2I vs T2V)
+function handleModelChange(modelsDataStore) {
     const modelSelect = document.querySelector('select[name="model"]');
-    const negativePromptGroup = document.querySelector('.input-group:has(#negative-prompt)');
-                    const stepsSlider = document.getElementById('steps');
-                    const stepsValueDisplay = document.getElementById('steps-value');
-    const guidanceSlider = document.getElementById('guidance');
-    const guidanceValueDisplay = document.getElementById('guidance-value');
-    const generateButton = document.querySelector('#generate-form .button-generate'); // Get generate button
-    const t2vFramesGroup = document.getElementById('t2v-frames-group'); // Get T2V frames group
-    const numFramesSlider = document.getElementById('num_frames');       // Get T2V frames slider
-    const numFramesValueDisplay = document.getElementById('num_frames-value'); // Get T2V frames display
-
     if (!modelSelect) return;
 
     const selectedModelId = modelSelect.value;
-    // Use the passed modelsDataStore which now contains the type
     const selectedModelData = modelsDataStore ? modelsDataStore[selectedModelId] : null;
 
-    // Default values (kept)
-    const defaultStepsMin = 20;
-    const defaultStepsMax = 50;
-    const defaultStepsVal = 30;
-    const defaultGuidanceMin = 1;
-    const defaultGuidanceMax = 20;
-    const defaultGuidanceVal = 7.5;
+    // Get references to relevant form elements
+    const negativePromptGroup = document.querySelector('.input-group:has(#negative-prompt)');
+    const stepsSlider = document.getElementById('steps');
+    const stepsValueDisplay = document.getElementById('steps-value');
+    const guidanceSlider = document.getElementById('guidance');
+    const guidanceValueDisplay = document.getElementById('guidance-value');
+    const generateButton = document.querySelector('#generate-form .button-generate');
+    const t2vFramesGroup = document.getElementById('t2v-frames-group');
+    const numFramesSlider = document.getElementById('num_frames');
+    const numFramesValueDisplay = document.getElementById('num_frames-value');
+    const numImagesGroup = document.querySelector('.input-group.image-only-setting');
+    const widthSelect = document.getElementById('width');
+    const heightSelect = document.getElementById('height');
 
-                    if (selectedModelId && selectedModelData) {
-        const isFluxModel = selectedModelId.toLowerCase().includes('flux');
+    // Default values (can be adjusted)
+    const defaults = {
+        image: { steps: 30, guidance: 7.5, width: 1024, height: 1024 },
+        t2v:   { steps: 50, guidance: 7.0, width: 704, height: 480, frames: 161 }
+        // Add other model type defaults if needed
+    };
+
+    if (selectedModelId && selectedModelData) {
         const modelType = selectedModelData.type || 'image'; // Get model type
+        const isT2V = modelType === 't2v';
+        const isFluxModel = selectedModelId.toLowerCase().includes('flux'); // Keep Flux specific logic
 
-        // Update Generate Button Text based on type
+        // 1. Update Generate Button Text
         if (generateButton) {
-            if (modelType === 't2v') {
-                generateButton.innerHTML = '<span class="button-icon">🎬</span> Generate Video';
-            } else {
-                generateButton.innerHTML = '<span class="button-icon">⚡</span> Generate Image';
-            }
+            generateButton.innerHTML = isT2V
+                ? '<span class="button-icon">🎬</span> Generate Video'
+                : '<span class="button-icon">⚡</span> Generate Image';
         }
 
-        // Show/hide T2V Frames slider
+        // 2. Show/Hide Settings Groups
         if (t2vFramesGroup) {
-            if (modelType === 't2v') {
-                t2vFramesGroup.style.display = 'block';
-                // Initialize display value
-                if (numFramesSlider && numFramesValueDisplay) {
-                    numFramesValueDisplay.textContent = numFramesSlider.value;
-                }
-            } else {
-                t2vFramesGroup.style.display = 'none';
+            t2vFramesGroup.classList.toggle('hidden', !isT2V);
+        }
+        if (numImagesGroup) {
+            numImagesGroup.classList.toggle('hidden', isT2V);
+        }
+
+        // 3. Handle Negative Prompt (Keep Flux logic)
+        if (negativePromptGroup) {
+            negativePromptGroup.style.display = isFluxModel ? 'none' : 'block';
+            if (isFluxModel) {
+                negativePromptGroup.querySelector('textarea').value = '';
             }
         }
 
-        // Show/hide negative prompt (keep existing Flux logic, T2V might ignore it)
-                        if (negativePromptGroup) {
-                            if (isFluxModel) {
-                                negativePromptGroup.style.display = 'none';
-                                negativePromptGroup.querySelector('textarea').value = '';
-                            } else {
-                                negativePromptGroup.style.display = 'block';
-                            }
-                        }
+        // 4. Update Sliders and Selects based on type
+        const currentDefaults = defaults[modelType] || defaults.image;
 
-        // Update Steps slider (existing logic)
-                        if (stepsSlider && stepsValueDisplay) {
-                            const stepConfig = selectedModelData.step_config || {};
-                            let currentSteps = null;
+        // --- Steps ---
+        if (stepsSlider && stepsValueDisplay) {
+            const stepConfig = selectedModelData.step_config || {};
+            let currentSteps = null;
+            stepsSlider.disabled = false;
+            stepsSlider.classList.remove('disabled');
 
-                            stepsSlider.disabled = false;
-                            stepsSlider.classList.remove('disabled');
+            // Override ranges/defaults if needed based on model or type
+            // Example: Set different defaults for T2V
+            stepsSlider.min = stepConfig.steps?.min ?? (isT2V ? 10 : 20); // T2V might allow fewer steps
+            stepsSlider.max = stepConfig.steps?.max ?? (isT2V ? 60 : 50);
+            currentSteps = stepConfig.steps?.default ?? currentDefaults.steps;
 
-                            if (stepConfig.fixed_steps !== undefined) {
-                                currentSteps = stepConfig.fixed_steps;
-                                stepsSlider.value = currentSteps;
-                                stepsSlider.min = currentSteps;
-                                stepsSlider.max = currentSteps;
-                                stepsSlider.disabled = true;
-                                stepsSlider.classList.add('disabled');
-                            } else if (stepConfig.steps && stepConfig.steps.min !== undefined && stepConfig.steps.max !== undefined) {
-                stepsSlider.min = stepConfig.steps.min;
-                stepsSlider.max = stepConfig.steps.max;
-                currentSteps = stepConfig.steps.default !== undefined ? stepConfig.steps.default : Math.round((stepConfig.steps.min + stepConfig.steps.max) / 2);
-                            } else {
-                stepsSlider.min = defaultStepsMin;
-                stepsSlider.max = defaultStepsMax;
-                currentSteps = defaultStepsVal;
-            }
-
-            const lastStepsValue = localStorage.getItem('lastStepsValue');
-            if (lastStepsValue !== null && Number(lastStepsValue) >= stepsSlider.min && Number(lastStepsValue) <= stepsSlider.max && !stepsSlider.disabled) {
-                stepsSlider.value = Number(lastStepsValue);
+            if (stepConfig.fixed_steps !== undefined) {
+                 currentSteps = stepConfig.fixed_steps;
+                 stepsSlider.value = currentSteps;
+                 stepsSlider.min = currentSteps;
+                 stepsSlider.max = currentSteps;
+                 stepsSlider.disabled = true;
+                 stepsSlider.classList.add('disabled');
             } else {
-                                stepsSlider.value = currentSteps;
-                            }
+                // Try to load last value, ensuring it's within new bounds
+                const lastStepsValue = localStorage.getItem('lastStepsValue');
+                if (lastStepsValue !== null && Number(lastStepsValue) >= stepsSlider.min && Number(lastStepsValue) <= stepsSlider.max) {
+                    stepsSlider.value = Number(lastStepsValue);
+                } else {
+                    stepsSlider.value = currentSteps;
+                }
+            }
+            stepsValueDisplay.textContent = stepsSlider.value;
+            localStorage.setItem('lastStepsValue', stepsSlider.value);
+        }
 
-                                stepsValueDisplay.textContent = stepsSlider.value;
-                                localStorage.setItem('lastStepsValue', stepsSlider.value);
-                            }
-
-        // Update Guidance Slider
+        // --- Guidance ---
         if (guidanceSlider && guidanceValueDisplay) {
-             const stepConfig = selectedModelData.step_config || {};
-             let currentGuidance = null;
-             guidanceSlider.disabled = false;
-             guidanceSlider.classList.remove('disabled');
+            const guidanceConfig = selectedModelData.step_config?.guidance || {};
+            guidanceSlider.disabled = false;
+            guidanceSlider.classList.remove('disabled');
 
-             if (stepConfig.guidance && stepConfig.guidance.min !== undefined && stepConfig.guidance.max !== undefined) {
-                 guidanceSlider.min = stepConfig.guidance.min;
-                 guidanceSlider.max = stepConfig.guidance.max;
-                 guidanceSlider.step = stepConfig.guidance.step || 0.1;
-                 currentGuidance = stepConfig.guidance.default !== undefined ? stepConfig.guidance.default : (stepConfig.guidance.min + stepConfig.guidance.max) / 2;
-                        } else {
-                 guidanceSlider.min = defaultGuidanceMin;
-                 guidanceSlider.max = defaultGuidanceMax;
-                 guidanceSlider.step = 0.5;
-                 currentGuidance = defaultGuidanceVal;
-             }
+            guidanceSlider.min = guidanceConfig.min ?? (isT2V ? 1 : 1);
+            guidanceSlider.max = guidanceConfig.max ?? (isT2V ? 10 : 20);
+            guidanceSlider.step = guidanceConfig.step ?? (isT2V ? 0.1 : 0.5);
+            let currentGuidance = guidanceConfig.default ?? currentDefaults.guidance;
 
             const lastGuidanceValue = localStorage.getItem('lastGuidanceValue');
-             if (lastGuidanceValue !== null && Number(lastGuidanceValue) >= guidanceSlider.min && Number(lastGuidanceValue) <= guidanceSlider.max) {
-                 guidanceSlider.value = Number(lastGuidanceValue);
-        } else {
-                 guidanceSlider.value = currentGuidance;
-             }
-             guidanceValueDisplay.textContent = guidanceSlider.value;
-             localStorage.setItem('lastGuidanceValue', guidanceSlider.value);
+            if (lastGuidanceValue !== null && Number(lastGuidanceValue) >= guidanceSlider.min && Number(lastGuidanceValue) <= guidanceSlider.max) {
+                guidanceSlider.value = Number(lastGuidanceValue);
+            } else {
+                guidanceSlider.value = currentGuidance;
+            }
+            guidanceValueDisplay.textContent = guidanceSlider.value;
+            localStorage.setItem('lastGuidanceValue', guidanceSlider.value);
         }
 
-                } else {
-        // Reset to defaults if no model selected
-        if (generateButton) { // Reset button text
-            generateButton.innerHTML = '<span class="button-icon">⚡</span> Generate Image';
+        // --- Width/Height ---
+        if (widthSelect && heightSelect) {
+            // Set default value based on type
+            if (!widthSelect.querySelector(`option[value="${currentDefaults.width}"]`)) {
+                 console.warn(`Width option ${currentDefaults.width} not found for ${modelType} model.`);
+            }
+            if (!heightSelect.querySelector(`option[value="${currentDefaults.height}"]`)) {
+                 console.warn(`Height option ${currentDefaults.height} not found for ${modelType} model.`);
+            }
+            widthSelect.value = currentDefaults.width;
+            heightSelect.value = currentDefaults.height;
+            // Note: We are not saving/loading last width/height from localStorage currently
         }
-        if (t2vFramesGroup) { // Hide T2V frames
-            t2vFramesGroup.style.display = 'none';
+
+        // --- Num Frames (T2V only) ---
+        if (isT2V && numFramesSlider && numFramesValueDisplay) {
+            const framesConfig = selectedModelData.step_config?.frames || {}; // Check for specific frame config
+            numFramesSlider.min = framesConfig.min ?? 5;
+            numFramesSlider.max = framesConfig.max ?? 161; // LTX Max
+            numFramesSlider.step = framesConfig.step ?? 4;
+            let currentFrames = framesConfig.default ?? currentDefaults.frames;
+
+            // Maybe load last value? For now, set default
+            numFramesSlider.value = currentFrames;
+            numFramesValueDisplay.textContent = numFramesSlider.value;
+            // Not saving to localStorage for now
         }
+
+    } else {
+        // Reset to image defaults if no model selected
+        if (generateButton) generateButton.innerHTML = '<span class="button-icon">⚡</span> Generate Image';
+        if (t2vFramesGroup) t2vFramesGroup.classList.add('hidden');
+        if (numImagesGroup) numImagesGroup.classList.remove('hidden');
         if (negativePromptGroup) negativePromptGroup.style.display = 'block';
-        if (stepsSlider && stepsValueDisplay) {
-            stepsSlider.min = defaultStepsMin; stepsSlider.max = defaultStepsMax; stepsSlider.value = defaultStepsVal; stepsSlider.disabled = false; stepsValueDisplay.textContent = defaultStepsVal;
-        }
-        if (guidanceSlider && guidanceValueDisplay) {
-            guidanceSlider.min = defaultGuidanceMin; guidanceSlider.max = defaultGuidanceMax; guidanceSlider.step = 0.5; guidanceSlider.value = defaultGuidanceVal; guidanceValueDisplay.textContent = defaultGuidanceVal;
-        }
+
+        const imgDefaults = defaults.image;
+        if (stepsSlider && stepsValueDisplay) { stepsSlider.min = 20; stepsSlider.max = 50; stepsSlider.value = imgDefaults.steps; stepsSlider.disabled = false; stepsValueDisplay.textContent = imgDefaults.steps; localStorage.setItem('lastStepsValue', imgDefaults.steps); }
+        if (guidanceSlider && guidanceValueDisplay) { guidanceSlider.min = 1; guidanceSlider.max = 20; guidanceSlider.step = 0.5; guidanceSlider.value = imgDefaults.guidance; guidanceValueDisplay.textContent = imgDefaults.guidance; localStorage.setItem('lastGuidanceValue', imgDefaults.guidance); }
+        if (widthSelect && heightSelect) { widthSelect.value = imgDefaults.width; heightSelect.value = imgDefaults.height; }
     }
     localStorage.setItem('lastModelId', selectedModelId);
 }
@@ -1469,25 +1453,46 @@ async function showImageDetails(imageId) {
 // Gallery image appending
 function appendImagesToGallery(items) {
     const gallery = document.querySelector('.gallery-grid');
+    if (!gallery) return; // Ensure gallery exists
 
     items.forEach(item => {
         const div = document.createElement('div');
         div.className = 'gallery-item';
 
-        // Add both attributes for compatibility
+        // Add both attributes for compatibility and type info
         div.dataset.mediaId = item.id; // New attribute name
-        div.dataset.imageId = item.id; // Legacy attribute name for older HTML templates
-
-        div.dataset.mediaType = item.settings?.type === 'video' ? 'video' : 'image'; // Determine type
+        div.dataset.imageId = item.id; // Legacy attribute name
 
         const createdAt = new Date(item.created_at);
         const prompt = item.prompt || item.settings?.prompt || 'No prompt available';
-        const modelId = item.model_id || item.settings?.model_id || 'Unknown';
-        const mediaUrl = item.settings?.type === 'video' ? `/api/get_video/${item.id}` : API.IMAGE(item.id);
+        // Ensure model_id is correctly extracted from metadata if available
+        const modelId = item.model_id || item.metadata?.model_id || item.settings?.model_id || 'Unknown';
+
+        // --- Determine Media Type based on Model ---
+        let isVideoType = false;
+        let mediaType = 'image'; // Default to image
+        if (modelId !== 'Unknown' && availableModels[modelId]) {
+            const modelType = availableModels[modelId].type;
+            if (modelType === 't2v' || modelType === 'i2v') {
+                isVideoType = true;
+                mediaType = 'video';
+            }
+        } else {
+            // Fallback check if model info isn't in availableModels (e.g., older items)
+            // Use existing logic as a backup
+            if (item.settings?.type === 'video' || isVideo(item.id)) {
+                 isVideoType = true;
+                 mediaType = 'video';
+            }
+            console.warn(`Model ID ${modelId} not found in availableModels for item ${item.id}. Falling back to settings/ID check.`);
+        }
+        div.dataset.mediaType = mediaType; // Set the media type dataset
+        // --- End Media Type Determination ---
+
+        const mediaUrl = isVideoType ? `/api/get_video/${item.id}` : API.IMAGE(item.id);
 
         let previewHtml;
-        // Check if item is a video either by settings or ID pattern
-        if (item.settings?.type === 'video' || isVideo(item.id)) {
+        if (isVideoType) {
             previewHtml = `<video src="${mediaUrl}" controls muted loop preload="metadata" class="video-preview"></video>`;
         } else {
             previewHtml = `<img src="${mediaUrl}" alt="${prompt.slice(0, 50)}..." loading="lazy">`;
@@ -1498,9 +1503,9 @@ function appendImagesToGallery(items) {
                 ${previewHtml}
                 <div class="quick-actions">
                     <button class="action-copy-prompt" title="Copy Prompt" data-prompt="${prompt}">📋</button>
-                    ${item.settings?.type !== 'video' ? `<button class="action-generate-video" title="Generate Video from Image" data-image-id="${item.id}" data-image-prompt="${prompt}">🎥</button>` : ''}
-                    <button class="action-download" title="Download ${item.settings?.type === 'video' ? 'Video' : 'Image'}">⬇️</button>
-                    <button class="action-delete" title="Delete ${item.settings?.type === 'video' ? 'Video' : 'Image'}">🗑️</button>
+                    ${!isVideoType ? `<button class="action-generate-video" title="Generate Video from Image" data-image-id="${item.id}" data-image-prompt="${prompt}">🎥</button>` : ''}
+                    <button class="action-download" title="Download ${isVideoType ? 'Video' : 'Image'}">⬇️</button>
+                    <button class="action-delete" title="Delete ${isVideoType ? 'Video' : 'Image'}">🗑️</button>
                 </div>
             </div>
             <div class="item-details">
@@ -1510,13 +1515,7 @@ function appendImagesToGallery(items) {
             </div>
         `;
 
-        // Add click handlers (adjust as needed for video/image specifics)
-        div.addEventListener('click', () => {
-            document.querySelectorAll('.gallery-item').forEach(i => i.classList.remove('selected'));
-            div.classList.add('selected');
-            // Consider opening a specific video/image modal here if needed
-            // showMediaDetails(item.id, item.settings?.type === 'video');
-        });
+        // Add event listeners for quick actions (using delegation now, but individual listeners can be added here if needed)
 
         gallery.appendChild(div);
     });
@@ -1856,69 +1855,127 @@ function initializeKeepPromptCheckbox() {
     });
 }
 
-// Initialize copy prompt buttons in the gallery
-function initializeCopyPromptButtons() {
-    // Use event delegation for dynamically added copy buttons
-    document.body.addEventListener('click', async (event) => {
-        const button = event.target.closest('.action-copy-prompt');
-        if (button) {
+// --- ADDED: Event Delegation for Gallery Item Actions ---
+function initializeGalleryItemActions() {
+    const galleryGrid = document.querySelector('.gallery-grid');
+    if (!galleryGrid) return;
+
+    galleryGrid.addEventListener('click', async (e) => {
+        const galleryItem = e.target.closest('.gallery-item');
+        if (!galleryItem) return;
+
+        const mediaId = galleryItem.dataset.mediaId;
+        const mediaType = galleryItem.dataset.mediaType || 'image';
+
+        // Handle Copy Prompt
+        if (e.target.classList.contains('action-copy-prompt')) {
+            const button = e.target;
             const promptText = button.dataset.prompt;
             if (promptText) {
-                // Try to use clipboard API with fallback
-                try {
-                    let success = false;
-                    // Try modern Clipboard API first
-                    if (navigator.clipboard && navigator.clipboard.writeText) {
                 try {
                     await navigator.clipboard.writeText(promptText);
-                            success = true;
-                        } catch (err) {
-                            console.error('Clipboard API failed:', err);
-                            // Will fall back to execCommand
-                        }
-                    }
-
-                    // Fall back to execCommand if Clipboard API failed or not available
-                    if (!success) {
-                        const textarea = document.createElement('textarea');
-                        textarea.value = promptText;
-                        textarea.style.position = 'fixed';
-                        textarea.style.opacity = '0';
-                        document.body.appendChild(textarea);
-                        textarea.select();
-
-                        try {
-                            success = document.execCommand('copy');
-                        } catch (err) {
-                            console.error('execCommand failed:', err);
-                        } finally {
-                            document.body.removeChild(textarea);
-                        }
-                    }
-
-                    const originalHtml = button.innerHTML;
-                    if (success) {
-                    button.innerHTML = '✓ Copied';
-                    } else {
-                        button.innerHTML = '❌ Failed';
-                    }
+                    const originalText = button.textContent;
+                    button.textContent = 'Copied!';
                     button.disabled = true;
                     setTimeout(() => {
-                        button.innerHTML = originalHtml;
+                        button.textContent = originalText;
                         button.disabled = false;
                     }, 1500);
                 } catch (err) {
-                    console.error('Failed to copy prompt: ', err);
-                    const originalHtml = button.innerHTML;
-                    button.innerHTML = '❌ Error';
-                    setTimeout(() => {
-                        button.innerHTML = originalHtml;
-                    }, 1500);
+                    console.error('Failed to copy prompt:', err);
+                    // Optionally show feedback to user
                 }
             }
         }
+
+        // Handle Download
+        else if (e.target.classList.contains('action-download')) {
+            if (!mediaId) return;
+            const button = e.target;
+            const downloadUrl = mediaType === 'video' ? `/api/get_video/${mediaId}` : `/api/get_image/${mediaId}`;
+            const filename = `cyberimage-${mediaId}.${mediaType === 'video' ? 'mp4' : 'png'}`;
+            const originalText = button.textContent; // Store original icon/text if needed
+
+             try {
+                button.innerHTML = '⏳'; // Simple loading indicator
+                button.disabled = true;
+
+                const response = await fetch(downloadUrl);
+                 if (!response.ok) {
+                     throw new Error(`Failed to fetch media: ${response.statusText}`);
+                 }
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                window.URL.revokeObjectURL(url);
+
+                 setTimeout(() => {
+                    button.innerHTML = originalText; // Restore icon
+                    button.disabled = false;
+                 }, 500);
+
+            } catch (error) {
+                console.error('Download failed:', error);
+                button.innerHTML = '❌'; // Error indicator
+                 setTimeout(() => {
+                    button.innerHTML = originalText; // Restore icon
+                    button.disabled = false;
+                 }, 2000);
+            }
+        }
+
+        // Handle Delete
+        else if (e.target.classList.contains('action-delete')) {
+            if (!mediaId) return;
+            // Confirm deletion (reuse or create a confirmation modal)
+            const confirmed = confirm(`Are you sure you want to delete this ${mediaType}? This cannot be undone.`);
+            if (confirmed) {
+                try {
+                    const response = await fetch(`/api/${mediaType}/${mediaId}`, { method: 'DELETE' });
+                    if (response.ok) {
+                        galleryItem.style.transition = 'opacity 0.5s ease, transform 0.5s ease';
+                        galleryItem.style.opacity = '0';
+                        galleryItem.style.transform = 'scale(0.9)';
+                        setTimeout(() => galleryItem.remove(), 500);
+                        // Optionally update counts or show feedback
+                    } else {
+                        console.error('Failed to delete:', response.statusText);
+                         alert(`Failed to delete ${mediaType}. Server responded: ${response.statusText}`);
+                        // Show error feedback
+                    }
+                } catch (error) {
+                    console.error('Error deleting:', error);
+                     alert(`An error occurred while trying to delete the ${mediaType}.`);
+                    // Show error feedback
+                }
+            }
+        }
+
+        // Handle Generate Video (if applicable)
+        else if (e.target.classList.contains('action-generate-video') && mediaType === 'image') {
+             if (!mediaId) return;
+             const button = e.target;
+             const sourceImageUrl = galleryItem.querySelector('img')?.src;
+             const sourcePrompt = button.dataset.imagePrompt; // Get prompt from data attribute
+
+             if (sourceImageUrl && sourcePrompt !== undefined) {
+                 openVideoGenModal(mediaId, sourceImageUrl, sourcePrompt);
+             } else {
+                console.error("Missing image URL or prompt for video generation.", {mediaId, sourceImageUrl, sourcePrompt});
+                alert("Could not retrieve necessary information to generate video from this image.");
+             }
+        }
     });
 }
+// --- END ADDED ---
+
+// --- DEPRECATED? Remove or refactor initializeCopyPromptButtons if replaced by delegation ---
+// function initializeCopyPromptButtons() { ... } // Keep if used elsewhere, otherwise remove
 
 // --- Video Generation Modal Logic ---
 function initializeVideoGenerationModal() {
@@ -2138,3 +2195,29 @@ function showMainFeedback(message, type = 'info') {
 function isVideo(mediaId) {
     return mediaId.startsWith('vid_') || mediaId.includes('_vid_');
 }
+
+// --- ADDED: Hover-to-play for gallery videos ---
+function initializeVideoHoverPlay() {
+    const galleryGrid = document.querySelector('.gallery-grid');
+    if (!galleryGrid) return;
+
+    galleryGrid.addEventListener('mouseover', (e) => {
+        const video = e.target.closest('.gallery-item[data-media-type="video"] video');
+        if (video && !video.hasAttribute('data-playing')) {
+            video.play().catch(error => {
+                // Ignore errors like the user not interacting first, etc.
+                // console.log("Video play interrupted or failed:", error);
+            });
+            video.setAttribute('data-playing', 'true'); // Mark as playing
+        }
+    });
+
+    galleryGrid.addEventListener('mouseout', (e) => {
+        const video = e.target.closest('.gallery-item[data-media-type="video"] video');
+        if (video && video.hasAttribute('data-playing')) {
+            video.pause();
+            video.removeAttribute('data-playing'); // Unmark
+        }
+    });
+}
+// --- END ADDED ---

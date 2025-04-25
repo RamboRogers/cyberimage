@@ -133,6 +133,72 @@ def download_model(models_dir: Path, model_name: str, model_info: dict) -> bool:
                     shutil.rmtree(temp_path)
                 return False
 
+        # Add logic for GGUF URL download
+        elif model_info["source"] == "gguf_url":
+            import requests
+            import math
+
+            url = model_info["repo"] # The URL is stored in the repo field
+            filename = url.split('/')[-1] # Extract filename from URL
+            model_file_path = temp_path / filename
+
+            print_status(f"Downloading GGUF file from URL: {url}", "info")
+
+            try:
+                response = requests.get(url, stream=True, timeout=600) # 10 min timeout
+                response.raise_for_status() # Raise an exception for bad status codes
+
+                total_size = int(response.headers.get('content-length', 0))
+                block_size = 1024 * 1024 # 1MB chunks
+                downloaded_size = 0
+
+                with open(model_file_path, "wb") as f:
+                    for chunk in response.iter_content(chunk_size=block_size):
+                        if chunk:
+                            f.write(chunk)
+                            downloaded_size += len(chunk)
+                            if total_size > 0:
+                                progress = (downloaded_size / total_size) * 100
+                                # Simple progress update to console
+                                sys.stdout.write(f"\rDownloading {filename}: {downloaded_size / block_size:.1f}/{total_size / block_size:.1f} MB ({progress:.1f}%)")
+                                sys.stdout.flush()
+
+                sys.stdout.write("\n") # New line after progress
+
+                if downloaded_size == 0 or (total_size != 0 and downloaded_size != total_size):
+                    print_status(f"Download incomplete. Expected {total_size} bytes, got {downloaded_size}", "error")
+                    if model_file_path.exists(): model_file_path.unlink()
+                    if temp_path.exists(): shutil.rmtree(temp_path)
+                    return False
+
+                # Move to final location
+                if model_path.exists():
+                    print_status(f"Model path {model_path} already exists, won't overwrite", "warning")
+                    shutil.rmtree(temp_path)
+                    return True
+
+                print_status(f"Moving from {temp_path} to {model_path}", "info")
+                # Ensure the final directory exists before renaming the file into it
+                model_path.mkdir(exist_ok=True)
+                model_file_path.rename(model_path / filename)
+                # Remove the now-empty temp directory
+                if temp_path.exists():
+                     shutil.rmtree(temp_path)
+
+                print_status(f"Successfully downloaded {sanitized_name}", "success")
+                return True
+
+            except requests.exceptions.RequestException as e:
+                print_status(f"Failed to download GGUF file: {str(e)}", "error")
+                if model_file_path.exists(): model_file_path.unlink()
+                if temp_path.exists(): shutil.rmtree(temp_path)
+                return False
+            except Exception as e:
+                print_status(f"An unexpected error occurred during GGUF download: {str(e)}", "error")
+                if model_file_path.exists(): model_file_path.unlink()
+                if temp_path.exists(): shutil.rmtree(temp_path)
+                return False
+
         # Keep Civitai download logic as is
         elif model_info["source"] == "civitai":
             # Extract model ID from repo string

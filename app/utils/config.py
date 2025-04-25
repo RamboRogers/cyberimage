@@ -104,23 +104,23 @@ def parse_model_config() -> Dict[str, Dict[str, Any]]:
                 if not download_enabled:
                     logger.info(f"Model {name} is defined but disabled for download")
 
-                # Determine model type from name for automatic file lists
-                model_type = "generic" # Start with generic
+                # Determine model type from name (heuristic, can be overridden by JSON)
+                heuristic_model_type = "generic" # Start with generic
                 if "flux" in name.lower():
-                    model_type = "flux"
+                    heuristic_model_type = "flux"
                 elif "sd-3" in name.lower():
-                    model_type = "sd3"
+                    heuristic_model_type = "sd3"
                 elif "animagine" in name.lower():
-                    model_type = "sdxl"  # Animagine XL uses SDXL architecture
+                    heuristic_model_type = "sdxl"  # Animagine XL uses SDXL architecture
                 elif "xl" in name.lower() or "sdxl" in name.lower():
-                    model_type = "sdxl"
+                    heuristic_model_type = "sdxl"
 
-                # Get appropriate file list based on model name or type
+                # Get appropriate file list based on model name or heuristic type
                 files = []
                 if name in common_file_lists:
                     files = common_file_lists[name]
-                elif model_type in common_file_lists:
-                    files = common_file_lists[model_type]
+                elif heuristic_model_type in common_file_lists:
+                    files = common_file_lists[heuristic_model_type]
 
                 # Parse the optional JSON configuration
                 step_config = {}
@@ -147,8 +147,8 @@ def parse_model_config() -> Dict[str, Dict[str, Any]]:
 
                 # Determine final model type: Explicit JSON type > Heuristic > Default ('image')
                 final_model_type = 'image' # Default to image
-                if model_type != 'generic': # If heuristic found something specific
-                    final_model_type = model_type
+                if heuristic_model_type != 'generic': # If heuristic found something specific
+                    final_model_type = heuristic_model_type
 
                 # --- Override model_type if specified in step_config --- #
                 if isinstance(step_config, dict) and 'type' in step_config:

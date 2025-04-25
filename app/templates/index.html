@@ -121,12 +121,14 @@
                                     <div class="dimension-controls">
                                         <select id="width" name="width" class="input-field">
                                             <option value="512">512px</option>
+                                            <option value="704">704px</option>
                                             <option value="768">768px</option>
                                             <option value="1024" selected>1024px</option>
                                             <option value="1280">1280px</option>
                                         </select>
                                         <span class="dimension-separator">×</span>
                                         <select id="height" name="height" class="input-field">
+                                            <option value="480">480px</option>
                                             <option value="512">512px</option>
                                             <option value="768">768px</option>
                                             <option value="1024" selected>1024px</option>
@@ -135,7 +137,8 @@
                                     </div>
                                 </div>
 
-                                <div class="input-group compact">
+                                <!-- Add class 'image-only-setting' -->
+                                <div class="input-group compact image-only-setting">
                                     <label for="num_images">Images</label>
                                     <div class="input-with-value">
                                         <input type="range" id="num_images" name="num_images" min="1" max="8" value="1" class="slider">
@@ -160,14 +163,16 @@
                                     <span class="slider-value" id="guidance-value">7.5</span>
                                     </div>
 
-                                <!-- ADDED: T2V Frames Slider (hidden by default) -->
-                                <div class="input-group" id="t2v-frames-group" style="display: none;">
+                                <!-- T2V Frames Group (already has ID) -->
+                                <div class="input-group video-only-setting" id="t2v-frames-group" style="display: none;">
                                     <label for="num_frames">Number of Frames</label>
-                                    <input type="range" id="num_frames" name="num_frames" min="5" max="33" value="17" step="4" class="slider">
-                                    <span class="slider-value" id="num_frames-value">17</span>
-                                    <small>Video length depends on model & FPS. Must be 5, 9, 13, 17...</small>
+                                    <div class="input-with-value">
+                                        <input type="range" id="num_frames" name="num_frames" min="5" max="161" value="17" step="4" class="slider">
+                                        <span class="slider-value value-display" id="num_frames-value">17</span>
+                                    </div>
+                                    <small>Video length depends on model & FPS. LTX: 161 frames (~6.7s @ 24fps)</small>
                                 </div>
-                                <!-- END ADDED -->
+                                <!-- END T2V Frames Group -->
 
                                 <div class="input-group keep-prompt-group">
                                     <label for="keep_prompt">Keep Prompt</label>
@@ -213,29 +218,50 @@
             <h2>Recent Generations</h2>
             <div class="gallery-grid">
                 {% for image in recent_images %}
-                <div class="gallery-item" data-image-id="{{ image.id }}">
-                    {% if 'vid_' in image.id or '_vid_' in image.id %}
-                    <video controls preload="metadata">
-                        <source src="{{ url_for('api.get_video', video_id=image.id) }}" type="video/mp4">
-                        Your browser does not support the video tag.
-                    </video>
-                    {% else %}
-                    <img src="{{ url_for('api.get_image', image_id=image.id) }}"
-                         alt="{{ image.prompt[:50] }}..."
-                         loading="lazy">
-                    {% endif %}
-                    <div class="quick-actions">
-                        <button class="action-copy-prompt" title="Copy Prompt" data-prompt="{{ image.prompt }}">📋</button>
-                        <button class="action-generate-video" title="Generate Video from Image" data-image-id="{{ image.id }}" data-image-prompt="{{ image.prompt }}">🎥</button>
+                {# Metadata is now a dictionary, access directly #}
+                {% set media_type = image.metadata.get('type', 'image') %}
+                {% set is_video = (media_type == 'video') %}
+                {# Retain model_id for display, prompt for alt/copy #}
+                {% set model_id = image.metadata.get('model_id', 'Unknown') %}
+                {% set prompt = image.metadata.get('prompt', '') %}
+
+                {# Update data attributes for consistency #}
+                <div class="gallery-item" data-media-id="{{ image.id }}" data-media-type="{{ media_type }}">
+                    {# Render video or image based on is_video flag #}
+                    {% if is_video %}
+                    <div class="item-preview">
+                        <video src="{{ url_for('api.get_video', video_id=image.id) }}" controls muted loop preload="metadata" class="video-preview"></video>
+                        <div class="quick-actions">
+                            <button class="action-copy-prompt" title="Copy Prompt" data-prompt="{{ prompt }}">📋</button>
+                            {# No generate video button for videos #}
+                            <button class="action-download" title="Download Video">⬇️</button>
+                            <button class="action-delete" title="Delete Video">🗑️</button>
+                        </div>
                     </div>
+                    {% else %}
+                    <div class="item-preview">
+                        <img src="{{ url_for('api.get_image', image_id=image.id) }}"
+                             alt="{{ prompt[:50] }}..."
+                             loading="lazy">
+                        <div class="quick-actions">
+                            <button class="action-copy-prompt" title="Copy Prompt" data-prompt="{{ prompt }}">📋</button>
+                            {# Show generate video button only for images #}
+                            <button class="action-generate-video" title="Generate Video from Image" data-image-id="{{ image.id }}" data-image-prompt="{{ prompt }}">🎥</button>
+                            <button class="action-download" title="Download Image">⬇️</button>
+                            <button class="action-delete" title="Delete Image">🗑️</button>
+                        </div>
+                    </div>
+                    {% endif %}
                     <div class="gallery-item-info">
-                        <p class="prompt">{{ image.prompt[:100] }}...</p>
-                        <p class="model">{{ image.model_id }}</p>
-                        <p class="date" title="{{ image.created_at.strftime('%Y-%m-%d %H:%M:%S %Z') }}">
-                            {{ image.created_at.strftime('%b %d, %I:%M %p') }}
+                        <p class="prompt">{{ prompt[:100] }}...</p>
+                        <p class="model">{{ model_id }}</p>
+                        <p class="date" title="{{ image.created_at.strftime('%Y-%m-%d %H:%M:%S %Z') if image.created_at else 'N/A' }}">
+                            {{ image.created_at.strftime('%b %d, %I:%M %p') if image.created_at else 'Unknown date' }}
                         </p>
                     </div>
                 </div>
+                {% else %}
+                <p>No recent generations found.</p>
                 {% endfor %}
             </div>
         </section>
@@ -255,7 +281,8 @@
             </div>
             <div class="fullscreen-body">
                 <div class="fullscreen-image">
-                    <img src="" alt="Generated image" id="modalImage">
+                    <img src="" alt="Generated image" id="modalImage" style="display: none;">
+                    <video src="" id="modalVideo" controls muted style="display: none; max-width: 100%; max-height: 70vh;"></video>
                 </div>
                 <div class="fullscreen-details">
                     <div class="details-section">

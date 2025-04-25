@@ -1223,6 +1223,7 @@ class GalleryManager {
         this.setupFilterHandling();
         this.setupShortcuts();
         this.setupTouchGestures();
+        this.setupVideoHoverPlay();
 
         // Load initial images if none are present
         if (this.galleryGrid.querySelectorAll('.gallery-item').length === 0) {
@@ -1629,6 +1630,12 @@ class GalleryManager {
         const displayDate = Utilities.formatDate(createdAt);
         const fullDate = Utilities.formatDateLong(createdAt);
 
+        // Determine media type based on model ID
+        const lowerModelId = modelId.toLowerCase();
+        const isVideo = lowerModelId.includes('t2v') || lowerModelId.includes('i2v');
+        const mediaType = isVideo ? 'video' : 'image';
+        div.dataset.mediaType = mediaType;
+
         // Highlight search terms in prompt if we have a filter
         let highlightedPrompt = Utilities.escapeHtml(prompt);
         let highlightedModelId = Utilities.escapeHtml(modelId);
@@ -1652,16 +1659,22 @@ class GalleryManager {
             });
         }
 
+        let previewHtml;
+        if (isVideo) {
+            previewHtml = `<video src="${window.API.GET_VIDEO(image.id)}" controls muted loop preload="metadata" class="video-preview"></video>`;
+        } else {
+            previewHtml = `<img data-src="${window.API.IMAGE(image.id)}" alt="${Utilities.escapeHtml(prompt.substring(0, 50))}" loading="lazy">`;
+        }
+
         div.innerHTML = `
             <div class="item-preview">
-                <img data-src="${window.API.IMAGE(image.id)}"
-                     alt="${Utilities.escapeHtml(prompt.substring(0, 50))}"
-                     loading="lazy">
+                ${previewHtml}
                 <div class="quick-actions">
-                    <button class="action-copy-prompt" title="Copy Prompt">📋</button>
-                    <button class="action-favorite" title="Select Image">⭐</button>
-                    <button class="action-download" title="Download">⬇️</button>
-                    <button class="action-delete" title="Delete Image">🗑️</button>
+                    <button class="action-copy-prompt" title="Copy Prompt" data-prompt="${Utilities.escapeHtml(prompt)}">📋</button>
+                    <button class="action-favorite" title="Select ${isVideo ? 'Video' : 'Image'}">⭐</button>
+                    ${!isVideo ? `<button class="action-generate-video" title="Generate Video from Image" data-image-id="${image.id}" data-image-prompt="${Utilities.escapeHtml(prompt)}">🎥</button>` : ''}
+                    <button class="action-download" title="Download ${isVideo ? 'Video' : 'Image'}">⬇️</button>
+                    <button class="action-delete" title="Delete ${isVideo ? 'Video' : 'Image'}">🗑️</button>
                 </div>
             </div>
             <div class="item-details">
@@ -1714,7 +1727,7 @@ class GalleryManager {
             // Handle action buttons
             if (e.target.classList.contains('action-copy-prompt')) {
                 e.stopPropagation();
-                this.copyPrompt(galleryItem.dataset.imageId, e.target);
+                this.copyPrompt(galleryItem.dataset.mediaId, e.target);
             } else if (e.target.classList.contains('action-favorite')) {
                 e.stopPropagation();
                 // CHANGED: Repurposed favorite button as select button
@@ -1722,10 +1735,20 @@ class GalleryManager {
                 e.target.textContent = this.selectionManager.isSelected(galleryItem) ? '✓' : '⭐';
             } else if (e.target.classList.contains('action-download')) {
                 e.stopPropagation();
-                this.downloadImage(galleryItem.dataset.imageId);
+                this.downloadImage(galleryItem.dataset.mediaId, galleryItem.dataset.mediaType || 'image');
             } else if (e.target.classList.contains('action-delete')) {
                 e.stopPropagation();
-                this.deleteImage(galleryItem.dataset.imageId);
+                this.deleteImage(galleryItem.dataset.mediaId, galleryItem.dataset.mediaType || 'image');
+            } else if (e.target.classList.contains('action-generate-video') && (galleryItem.dataset.mediaType || 'image') === 'image') {
+                e.stopPropagation();
+                const sourceImageUrl = galleryItem.querySelector('img')?.src;
+                const sourcePrompt = e.target.dataset.imagePrompt;
+                if (sourceImageUrl && sourcePrompt !== undefined) {
+                    openVideoGenModal(galleryItem.dataset.mediaId, sourceImageUrl, sourcePrompt);
+                } else {
+                    console.error("Missing image URL or prompt for video generation.", {mediaId: galleryItem.dataset.mediaId, sourceImageUrl, sourcePrompt});
+                    alert("Could not retrieve necessary information to generate video from this image.");
+                }
             } else if (!e.target.closest('.quick-actions')) {
                 // Show image in modal if not clicking on action buttons
                 const img = galleryItem.querySelector('img');
@@ -2146,42 +2169,45 @@ class GalleryManager {
     }
 
     /**
-     * Download an image
-     * @param {string} imageId - ID of image to download
+     * Download an image or video
+     * @param {string} mediaId - ID of media to download
+     * @param {string} mediaType - Type of media ('image' or 'video')
      */
-    async downloadImage(imageId) {
+    async downloadImage(mediaId, mediaType = 'image') {
         try {
-            const response = await fetch(window.API.IMAGE(imageId));
-            if (!response.ok) throw new Error('Failed to download image');
+            const downloadUrl = mediaType === 'video' ? window.API.GET_VIDEO(mediaId) : window.API.IMAGE(mediaId);
+            const response = await fetch(downloadUrl);
+            if (!response.ok) throw new Error('Failed to download media');
 
             const blob = await response.blob();
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = `cyberimage-${imageId}.png`;
+            a.download = `cyberimage-${mediaId}.${mediaType === 'video' ? 'mp4' : 'png'}`;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
             URL.revokeObjectURL(url);
 
-            Utilities.showFeedback('Image downloaded successfully!', 'success');
+            Utilities.showFeedback('Media downloaded successfully!', 'success');
         } catch (error) {
-            console.error('Error downloading image:', error);
-            Utilities.showFeedback('Failed to download image', 'error');
+            console.error('Error downloading media:', error);
+            Utilities.showFeedback('Failed to download media', 'error');
         }
     }
 
     /**
-     * Delete an image with confirmation dialog
-     * @param {string} imageId - ID of image to delete
+     * Delete an image or video with confirmation dialog
+     * @param {string} mediaId - ID of media to delete
+     * @param {string} mediaType - Type of media ('image' or 'video')
      */
-    deleteImage(imageId) {
+    deleteImage(mediaId, mediaType = 'image') {
         // Get element for both potential attribute names
-        const galleryItem = document.querySelector(`[data-image-id="${imageId}"]`) ||
-                           document.querySelector(`[data-media-id="${imageId}"]`);
+        const galleryItem = document.querySelector(`[data-image-id="${mediaId}"]`) ||
+                           document.querySelector(`[data-media-id="${mediaId}"]`);
 
         // Reuse the deleteCurrentImage method from ModalManager
-        this.modalManager.currentImageId = imageId;
+        this.modalManager.currentImageId = mediaId;
         this.modalManager.deleteCurrentImage();
     }
 
@@ -2194,6 +2220,30 @@ class GalleryManager {
             const isVisible = shortcutsHelp.style.display === 'block';
             shortcutsHelp.style.display = isVisible ? 'none' : 'block';
         }
+    }
+
+    /**
+     * Set up hover-to-play for video items in the gallery
+     */
+    setupVideoHoverPlay() {
+        this.galleryGrid.addEventListener('mouseover', (e) => {
+            const video = e.target.closest('.gallery-item[data-media-type="video"] video');
+            if (video && !video.hasAttribute('data-playing')) {
+                video.play().catch(error => {
+                    // Ignore errors like the user not interacting first, etc.
+                    console.log("Video play interrupted or failed:", error);
+                });
+                video.setAttribute('data-playing', 'true'); // Mark as playing
+            }
+        });
+
+        this.galleryGrid.addEventListener('mouseout', (e) => {
+            const video = e.target.closest('.gallery-item[data-media-type="video"] video');
+            if (video && video.hasAttribute('data-playing')) {
+                video.pause();
+                video.removeAttribute('data-playing'); // Unmark
+            }
+        });
     }
 }
 

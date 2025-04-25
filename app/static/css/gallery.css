@@ -893,3 +893,9 @@ kbd {
         transform: translateY(0);
     }
 }
+
+/* ADDED: Hide info overlay on hover for video items */
+.gallery-item[data-media-type="video"]:hover .item-details {
+    display: none;
+}
+/* END ADDED */

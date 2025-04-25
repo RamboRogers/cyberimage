@@ -196,3 +196,46 @@ All planned phases are now complete!
     - Uses a `feedbackType` ('Image' or 'Video') for UI messages.
   - Modified `pollGenerationStatus()`:
     - Added `feedbackType` parameter to display correct messages (e.g., "Generating Video...").
+
+## [YYYY-MM-DD] - Fix Video Export Data Type
+
+- **Issue:** Video output (specifically from LTX-Video T2V model) was corrupt.
+- **Root Cause:** The model pipeline returned frames as a Python `list`, but the `diffusers.utils.export_to_video` function expects a NumPy `ndarray`.
+- **Fix:**
+  - Modified `app/models/generator.py` (`process_job` method):
+    - Within the T2V and I2V generation blocks, added a check before calling `export_to_video`.
+    - If the `frames` variable is a `list`, convert it to a NumPy `ndarray` using `np.array()` list comprehension and `np.stack()`. Log the conversion.
+    - If `frames` is already an `ndarray`, proceed as before (with existing debug logs).
+    - Added error handling for the conversion process.
+- **Affected Files:**
+  - `app/models/generator.py`
+
+## [YYYY-MM-DD] - Further Debugging LTX Video Export
+
+- **Issue:** Video output still corrupt ("green lines") even after converting frame list to NumPy array.
+- **Investigation:** Compared code to reference, identified potential issues:
+    1.  **Dtype Mismatch:** LTX GGUF model loading in `get_model` wasn't strictly using `torch.bfloat16` as in reference.
+    2.  **Frame Format:** The frames returned by `generate_text_to_video` might be Tensors, not PIL Images, causing incorrect conversion to `uint8` NumPy array in `generator.py`.
+- **Fixes Applied:**
+    1.  Modified `app/models/manager.py` (`get_model`): Changed LTX GGUF loading to consistently use `torch.bfloat16`.
+    2.  Modified `app/models/manager.py` (`generate_text_to_video`): Added debug logging before returning `output_frames` to inspect their type, dtype, shape, and range (if tensor).
+- **Next Steps:** Analyze new logs to determine frame format and adjust conversion logic in `app/models/generator.py` if necessary.
+- **Affected Files:**
+    - `app/models/manager.py`
+
+## [YYYY-MM-DD] - Fix NameError in Video Debug Logging
+
+- **Issue:** Generation failed with `NameError: name 'Image' is not defined`.
+- **Root Cause:** Debug logging added in `generate_text_to_video` (`manager.py`) referenced `Image.Image` without the necessary `from PIL import Image` import.
+- **Fix:** Added `from PIL import Image` at the top of `app/models/manager.py`.
+- **Affected Files:**
+  - `app/models/manager.py`
+
+## [YYYY-MM-DD] - Address Video Distortion
+
+- **Issue:** After previous fixes, video was generated but appeared distorted.
+- **Investigation:** Compared application code flow to reference, identified key difference in `negative_prompt` handling.
+- **Root Cause:** Application used `None` for `negative_prompt` if user provided none, while reference code used a specific quality-enhancing prompt (`"worst quality, inconsistent motion, blurry, jittery, distorted"`).
+- **Fix:** Modified `generate_text_to_video` in `app/models/manager.py` to default to the reference negative prompt if none is provided in the job settings.
+- **Affected Files:**
+  - `app/models/manager.py`
