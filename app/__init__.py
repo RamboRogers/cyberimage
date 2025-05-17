@@ -6,6 +6,7 @@ from flask import Flask, g, current_app, request
 from flask_cors import CORS
 from pathlib import Path
 from app.utils.logging_config import setup_logging
+from app.utils.config import get_available_models
 from app.models.generator import GenerationPipeline
 from contextlib import suppress
 import sys
@@ -42,6 +43,7 @@ def create_app(test_config=None):
         DEFAULT_STEPS=30,
         DEFAULT_GUIDANCE_SCALE=7.5,
         DEFAULT_MODEL="flux-1",  # Updated default model
+        AVAILABLE_MODELS=get_available_models()
     )
 
     # Force single process mode in production

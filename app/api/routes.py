@@ -47,8 +47,16 @@ def handle_api_error(error):
 def get_models():
     """Return list of available models"""
     try:
+        processed_models = {}
+        for key, config in AVAILABLE_MODELS.items():
+            model_data = config.copy() # Start with a copy of the existing config
+            if config.get('source') == 'huggingface_api':
+                # Extract provider from step_config for API models
+                model_data['provider'] = config.get('step_config', {}).get('provider')
+            processed_models[key] = model_data
+
         return jsonify({
-            "models": AVAILABLE_MODELS,
+            "models": processed_models,
             "default": DEFAULT_MODEL
         })
     except Exception as e:

@@ -131,7 +131,30 @@ OPENAI_ENDPOINT=
 OPENAI_API_KEY=
 OPENAI_MODEL=
 CIVITAI_API_KEY=
+# Add provider-specific API keys here if needed, e.g.:
+# FAL_AI_API_KEY=
 ```
+
+### Hugging Face and Provider API Keys Workflow
+
+CyberImage utilizes API keys for various functionalities, primarily interacting with Hugging Face and specific model providers through their APIs.
+
+-   **`HF_TOKEN`**: This is your general Hugging Face API token. It is primarily used for:
+    -   Downloading models from the Hugging Face Hub (both for local use and as a fallback for some API models).
+    -   Authenticating with the Hugging Face Inference API for models that don't have a specific third-party provider or when a provider-specific key isn't set.
+    Ensure this token has the necessary permissions (usually 'read' access is sufficient for downloads and basic inference).
+
+-   **Provider-Specific API Keys (e.g., `FAL_AI_API_KEY`)**: Some models available through the Hugging Face API are hosted or served by third-party providers (e.g., `fal-ai`, `replicate`). These providers often require their own API keys for access.
+    -   When you configure a model in `.env` that specifies a `provider` in its `options_json` (e.g., `{"type": "t2v", "provider": "fal-ai"}`), the application will look for a corresponding environment variable for that provider's API key.
+    -   The naming convention for these keys is typically `PROVIDER_NAME_API_KEY` (e.g., `FAL_AI_API_KEY`, `REPLICATE_API_KEY`).
+    -   If a provider-specific key is found and required by the model's configuration, it will be used for authentication with that provider's service. Otherwise, `HF_TOKEN` might be used as a fallback if the provider accepts it, or the API call might fail if a dedicated key is mandatory.
+
+**Configuration:**
+
+1.  Add your `HF_TOKEN` to the `.env` file.
+2.  If you plan to use models that rely on a specific provider (like `fal-ai` for LTX-Video), obtain an API key from that provider and add it to your `.env` file using the appropriate variable name (e.g., `FAL_AI_API_KEY=your_fal_ai_key_here`).
+
+The application's `ModelManager` is responsible for selecting the correct API token based on the model's configuration (`source` and `provider` fields).
 
 ### Docker Installation (Recommended)
 

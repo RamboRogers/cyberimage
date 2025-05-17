@@ -62,6 +62,17 @@ def print_model_structure(model_path: Path, max_depth: int = 3):
 def download_model(models_dir: Path, model_name: str, model_info: dict) -> bool:
     """Download a complete model folder using HuggingFace CLI"""
     try:
+        # If it's an API model, no download is needed.
+        if model_info.get("source") == "huggingface_api":
+            print_status(f"Skipping download for API model {model_name}: {model_info.get('description', '')}", "info")
+            return True
+        
+        # If video generation is API-only, skip downloading any T2V or I2V models
+        model_type = model_info.get("options", {}).get("type")
+        if model_type in ["t2v", "i2v"]:
+            print_status(f"Model {model_name} is a {model_type.upper()} type and configured for API-only usage. No download required.", "info")
+            return True
+        
         # Ensure model_name doesn't have quotes or other characters that might cause issues
         sanitized_name = model_name.strip('"\' \t')
         model_path = models_dir / sanitized_name
@@ -344,6 +355,11 @@ def download_all_models():
 
         # Check which models need to be downloaded - SIMPLIFIED
         for model_name, model_info in enabled_models.items():
+            # Skip API models since they don't require downloading
+            if model_info.get('source') == 'huggingface_api':
+                print_status(f"Skipping API model {model_name} - no download needed", "info")
+                continue
+
             # Sanitize model name
             sanitized_name = model_name.strip('"\' \t')
             model_path = models_dir / sanitized_name

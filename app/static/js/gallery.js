@@ -1739,16 +1739,6 @@ class GalleryManager {
             } else if (e.target.classList.contains('action-delete')) {
                 e.stopPropagation();
                 this.deleteImage(galleryItem.dataset.mediaId, galleryItem.dataset.mediaType || 'image');
-            } else if (e.target.classList.contains('action-generate-video') && (galleryItem.dataset.mediaType || 'image') === 'image') {
-                e.stopPropagation();
-                const sourceImageUrl = galleryItem.querySelector('img')?.src;
-                const sourcePrompt = e.target.dataset.imagePrompt;
-                if (sourceImageUrl && sourcePrompt !== undefined) {
-                    openVideoGenModal(galleryItem.dataset.mediaId, sourceImageUrl, sourcePrompt);
-                } else {
-                    console.error("Missing image URL or prompt for video generation.", {mediaId: galleryItem.dataset.mediaId, sourceImageUrl, sourcePrompt});
-                    alert("Could not retrieve necessary information to generate video from this image.");
-                }
             } else if (!e.target.closest('.quick-actions')) {
                 // Show image in modal if not clicking on action buttons
                 const img = galleryItem.querySelector('img');

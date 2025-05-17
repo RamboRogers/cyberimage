@@ -109,7 +109,12 @@
                                 <select name="model" id="model" class="input-field" required>
                                     <option value="">Select Model</option>
                                     {% for model_id, info in available_models.items() %}
-                                    <option value="{{ model_id }}">{{ model_id }} - {{ info.description }}</option>
+                                    <option value="{{ model_id }}">
+                                        {{ model_id }} - {{ info.description }}
+                                        {% if info.source == 'huggingface_api' %}
+                                            (API: {{ info.provider or 'Default' }})
+                                        {% endif %}
+                                    </option>
                                     {% endfor %}
                                 </select>
                             </div>
@@ -267,6 +272,52 @@
         </section>
     </div>
 
+    <!-- Modal for video generation -->
+    <div id="videoGenModal" class="modal video-gen-modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Generate Video from Image</h2>
+                <button class="action-close" aria-label="Close modal" onclick="closeVideoGenModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="video-gen-preview">
+                    <img src="" alt="Source image" id="videoGenSourceImage">
+                    <div class="source-prompt-display">
+                        <h3>Original Prompt:</h3>
+                        <pre id="videoGenSourcePrompt">Loading...</pre>
+                    </div>
+                </div>
+                <form id="video-generate-form">
+                    <input type="hidden" id="videoGenSourceImageId" name="source_image_id">
+                    <div class="input-group">
+                        <label for="videoGenPromptInput">Video Prompt:</label>
+                        <textarea
+                            id="videoGenPromptInput"
+                            name="video_prompt"
+                            class="prompt-input"
+                            placeholder="Describe how the video should evolve from the image..."
+                            required
+                            rows="4"
+                        ></textarea>
+                    </div>
+                    <div class="input-group">
+                        <label for="videoGenModelSelect">Video Model:</label>
+                        <select id="videoGenModelSelect" name="video_model_id" class="input-field" required>
+                            <option value="">Loading models...</option>
+                            <!-- Video models will be populated by JavaScript -->
+                        </select>
+                    </div>
+                    <div class="modal-actions">
+                        <button type="submit" class="button button-generate">
+                            <span class="button-icon">▶️</span> Generate Video
+                        </button>
+                         <button type="button" class="button button-cancel" onclick="closeVideoGenModal()">Cancel</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
     <!-- Modal for image details -->
     <div class="modal">
         <div class="modal-content">
@@ -310,52 +361,6 @@
                         </button>
                     </div>
                 </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Modal for video generation -->
-    <div id="videoGenModal" class="modal video-gen-modal" style="display: none;">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h2>Generate Video from Image</h2>
-                <button class="action-close" aria-label="Close modal" onclick="closeVideoGenModal()">&times;</button>
-            </div>
-            <div class="modal-body">
-                <div class="video-gen-preview">
-                    <img src="" alt="Source image" id="videoGenSourceImage">
-                    <div class="source-prompt-display">
-                        <h3>Original Prompt:</h3>
-                        <pre id="videoGenSourcePrompt">Loading...</pre>
-                    </div>
-                </div>
-                <form id="video-generate-form">
-                    <input type="hidden" id="videoGenSourceImageId" name="source_image_id">
-                    <div class="input-group">
-                        <label for="videoGenPromptInput">Video Prompt:</label>
-                        <textarea
-                            id="videoGenPromptInput"
-                            name="video_prompt"
-                            class="prompt-input"
-                            placeholder="Describe how the video should evolve from the image..."
-                            required
-                            rows="4"
-                        ></textarea>
-                    </div>
-                    <div class="input-group">
-                        <label for="videoGenModelSelect">Video Model:</label>
-                        <select id="videoGenModelSelect" name="video_model_id" class="input-field" required>
-                            <option value="">Loading models...</option>
-                            <!-- Video models will be populated by JavaScript -->
-                        </select>
-                    </div>
-                    <div class="modal-actions">
-                        <button type="submit" class="button button-generate">
-                            <span class="button-icon">▶️</span> Generate Video
-                        </button>
-                         <button type="button" class="button button-cancel" onclick="closeVideoGenModal()">Cancel</button>
-                    </div>
-                </form>
             </div>
         </div>
     </div>

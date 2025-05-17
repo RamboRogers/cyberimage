@@ -2,12 +2,12 @@
 
 ## Change History
 
-### [DATE] Initial Setup
+### [2025-05-17] Initial Setup
 - Created NOTES.md for project tracking
 - Created EDITS.md for change logging
 - Updated project design with specific models and storage decisions
 
-### [DATE] Phase 1 Implementation
+### [2025-05-17] Phase 1 Implementation
 - Created project directory structure
 - Set up requirements.txt with carefully selected dependencies
 - Initialized Flask application with:
@@ -18,7 +18,7 @@
 - Defined available models configuration
 - Created application entry point
 
-### [DATE] Phase 2 Implementation
+### [2025-05-17] Phase 2 Implementation
 - Created database initialization system with SQLite
 - Implemented queue management system with:
   - Job creation and status tracking
@@ -30,7 +30,7 @@
   - Memory management
 - Updated main application to use new components
 
-### [DATE] Phase 3 Implementation
+### [2025-05-17] Phase 3 Implementation
 - Created image management system with:
   - Organized storage structure (by date)
   - Database tracking
@@ -44,7 +44,7 @@
 - Added input validation and error handling
 - Integrated all components (Queue, Model, Image managers)
 
-### [DATE] Phase 4 Implementation
+### [2025-05-17] Phase 4 Implementation
 - Created generation pipeline:
   - Job processing system
   - Error handling and recovery
@@ -63,7 +63,7 @@
   - Inference mode
   - Default parameters
 
-### [DATE] Phase 5 Implementation
+### [2025-05-17] Phase 5 Implementation
 - Implemented comprehensive logging system:
   - Rotating file handlers
   - Separate logs for app, errors, and models
@@ -87,7 +87,7 @@
   - Performance tuning options
   - Default generation parameters
 
-### [DATE] Frontend Enhancements (localStorage)
+### [2025-05-17] Frontend Enhancements (localStorage)
 - Modified `app/static/js/main.js`:
   - Added logic to `initializeModels` to load `lastModelId` from `localStorage` and apply it to the model select.
   - Added logic to model select `change` event listener to save the selected `modelId` to `localStorage`.
@@ -95,7 +95,7 @@
   - Added event listener to steps slider (`input`) to save its value to `localStorage`.
   - Added logic to form `submit` event listener to save both current `modelId` and `stepsValue` to `localStorage`.
 
-### [DATE] Backend Model Step Configuration
+### [2025-05-17] Backend Model Step Configuration
 - Updated `.env.example` and `.env`:
   - Modified format comment to include optional `<options_json>`.
   - Added `MODEL_4` entry for `sana-sprint` with `{\"fixed_steps\": 2}` configuration.
@@ -105,7 +105,7 @@
   - Stored the parsed dictionary (or empty dict if invalid/missing) into the `step_config` key for each model in `models_config`.
 - Verified `app/api/routes.py` (`/api/models` endpoint): Confirmed it returns the `AVAILABLE_MODELS` dictionary directly, which now includes the `step_config` data. No changes needed.
 
-### [DATE] Frontend Step Configuration Handling
+### [2025-05-17] Frontend Step Configuration Handling
 - Modified `app/static/js/main.js`:
   - In `initializeModels`:
     - Created `modelsDataStore` to hold the full configuration fetched for each model.
@@ -155,7 +155,7 @@
 Completed Phase 5: Testing & Optimization
 All planned phases are now complete!
 
-## [YYYY-MM-DD] - Add Video Generation Feature (Initial Phase)
+## [2025-05-17] - Add Video Generation Feature (Initial Phase)
 
 - **API.md:** Added documentation for new `/api/generate_video` endpoint and corresponding `GET /get_video/<video_id>`.
 - **NOTES.md:** Documented design, model details, API endpoint, planned changes for video generation.
@@ -167,7 +167,7 @@ All planned phases are now complete!
     - [x] `GenerationPipeline.process_job` update for video jobs (in `app/models/generator.py`).
     - Frontend JS for modal and video handling.
 
-## [YYYY-MM-DD] - Image-to-Video Model Detection Fix
+## [2025-05-17] - Image-to-Video Model Detection Fix
 
 - **Issue:** The application was failing to recognize "wan-i2v-14b" as a valid image-to-video model, causing an error: "Error: Model wan-i2v-14b is not a video generation model".
 - **Fix:**
@@ -178,7 +178,7 @@ All planned phases are now complete!
     - Added fallback description for models missing description field
   - This change allows proper detection of I2V models regardless of server-side type configuration
 
-## [YYYY-MM-DD] - Main Form T2V/T2I Integration
+## [2025-05-17] - Main Form T2V/T2I Integration
 
 - **Goal:** Allow Text-to-Video (T2V) generation directly from the main prompt form, alongside Text-to-Image (T2I).
 - **Changes in `app/static/js/main.js`:**
@@ -197,7 +197,7 @@ All planned phases are now complete!
   - Modified `pollGenerationStatus()`:
     - Added `feedbackType` parameter to display correct messages (e.g., "Generating Video...").
 
-## [YYYY-MM-DD] - Fix Video Export Data Type
+## [2025-05-17] - Fix Video Export Data Type
 
 - **Issue:** Video output (specifically from LTX-Video T2V model) was corrupt.
 - **Root Cause:** The model pipeline returned frames as a Python `list`, but the `diffusers.utils.export_to_video` function expects a NumPy `ndarray`.
@@ -210,7 +210,7 @@ All planned phases are now complete!
 - **Affected Files:**
   - `app/models/generator.py`
 
-## [YYYY-MM-DD] - Further Debugging LTX Video Export
+## [2025-05-17] - Further Debugging LTX Video Export
 
 - **Issue:** Video output still corrupt ("green lines") even after converting frame list to NumPy array.
 - **Investigation:** Compared code to reference, identified potential issues:
@@ -223,7 +223,7 @@ All planned phases are now complete!
 - **Affected Files:**
     - `app/models/manager.py`
 
-## [YYYY-MM-DD] - Fix NameError in Video Debug Logging
+## [2025-05-17] - Fix NameError in Video Debug Logging
 
 - **Issue:** Generation failed with `NameError: name 'Image' is not defined`.
 - **Root Cause:** Debug logging added in `generate_text_to_video` (`manager.py`) referenced `Image.Image` without the necessary `from PIL import Image` import.
@@ -231,7 +231,7 @@ All planned phases are now complete!
 - **Affected Files:**
   - `app/models/manager.py`
 
-## [YYYY-MM-DD] - Address Video Distortion
+## [2025-05-17] - Address Video Distortion
 
 - **Issue:** After previous fixes, video was generated but appeared distorted.
 - **Investigation:** Compared application code flow to reference, identified key difference in `negative_prompt` handling.
@@ -240,7 +240,7 @@ All planned phases are now complete!
 - **Affected Files:**
   - `app/models/manager.py`
 
-## [YYYY-MM-DD] - Fix I2V Model Loading Error
+## [2025-05-17] - Fix I2V Model Loading Error
 
 - **Issue:** Image-to-Video generation failed with `OSError: We couldn't connect to 'https://huggingface.co' ...` and `LocalEntryNotFoundError`.
 - **Root Cause:** The `wan-i2v-14b` model's components (specifically `image_encoder`) were missing from the local cache, and the loading code in `get_model` used `local_files_only=True`, preventing download.
@@ -248,7 +248,7 @@ All planned phases are now complete!
 - **Affected Files:**
   - `app/models/manager.py`
 
-## [YYYY-MM-DD] - Fix I2V Model Structure Error
+## [2025-05-17] - Fix I2V Model Structure Error
 
 - **Issue:** Image-to-Video generation failed again with `OSError: ... does not appear to have a file named pytorch_model.bin...`.
 - **Investigation:** Compared model ID used by application to reference code.
@@ -259,7 +259,7 @@ All planned phases are now complete!
 - **Affected Files:**
     - `app/models/manager.py`
 
-## [YYYY-MM-DD] - Fix I2V Job Routing
+## [2025-05-17] - Fix I2V Job Routing
 
 - **Issue:** I2V job processed by image generation logic, causing `TypeError` due to missing `image` argument.
 - **Root Cause:** The `/generate_video` API route in `app/api/routes.py` incorrectly set the job type to `"video"` instead of `"i2v"`.
@@ -267,7 +267,7 @@ All planned phases are now complete!
 - **Affected Files:**
     - `app/api/routes.py`
 
-## [YYYY-MM-DD] - Fix Media Deletion on Index Page
+## [2025-05-17] - Fix Media Deletion on Index Page
 
 - **Issue:** Delete button failed with "NOT FOUND" error on index page for videos, while working on gallery page.
 - **Root Cause:** The delete event handler in `main.js` (for index page) dynamically built the API endpoint using `mediaType` (`/api/${mediaType}/${mediaId}`), hitting non-existent `/api/video/...` DELETE endpoint. `gallery.js` correctly always used `/api/image/...`.
@@ -275,7 +275,7 @@ All planned phases are now complete!
 - **Affected Files:**
     - `app/static/js/main.js`
 
-## [YYYY-MM-DD] - Fix I2V Out-of-Memory Error
+## [2025-05-17] - Fix I2V Out-of-Memory Error
 
 - **Issue:** Image-to-Video generation failed with `CUDA out of memory`.
 - **Root Cause:** The calculated generation resolution (e.g., 960x960) was too high for the available VRAM when using the `wan-i2v-14b` model. The reference code used a smaller `max_area`.
@@ -283,7 +283,7 @@ All planned phases are now complete!
 - **Affected Files:**
     - `app/models/generator.py`
 
-## [YYYY-MM-DD] - Add Experimental LTX GGUF I2V Support
+## [2025-05-17] - Add Experimental LTX GGUF I2V Support
 
 - **Goal:** Attempt to use the pre-loaded LTX GGUF transformer for Image-to-Video.
 - **Caveat:** This deviates from LTX I2V reference code and might not be compatible.
@@ -293,10 +293,26 @@ All planned phases are now complete!
 - **Affected Files:**
     - `app/models/manager.py`
 
-## [YYYY-MM-DD] - Fix LTX I2V NameError
+## [2025-05-17] - Fix LTX I2V NameError
 
 - **Issue:** LTX I2V loading failed with `NameError: name 'LTXImageToVideoPipeline' is not defined`.
 - **Root Cause:** The import for `LTXImageToVideoPipeline` was missing from `app/models/manager.py`.
 - **Fix:** Added `LTXImageToVideoPipeline` to the `diffusers` import statement at the top of `app/models/manager.py`.
 - **Affected Files:**
     - `app/models/manager.py`
+
+## [2025-05-17] - Simplify Video Generation Pipeline for API-Only
+
+- **Goal:** Update the video generation pipeline to be API-only, simplifying the logic and focusing on external providers for video tasks.
+- **Changes:**
+    1.  **Rationale:** Fulfill user request to simplify the video pipeline to be API-only, reducing complexity and focusing on external providers for video tasks.
+
+    2.  **File:** `app/utils/download_models.py`
+        *   **Change:** Modified `download_model` function to skip downloading T2V and I2V model types.
+        *   **Details:** Added a check for `model_type` being `t2v` or `i2v`. If so, logs an informational message and returns `True`, as these models are now API-only and do not require local files.
+        *   **Rationale:** Align with the API-only video generation strategy, preventing unnecessary download attempts for video models.
+
+    3.  **File:** `app/models/generator.py`
+        *   **Change:** Simplified `GenerationPipeline.process_job` for T2V and I2V generation.
+        *   **Details:** Removed logic that handled a list of frames and called `export_to_video` for video types. The method now expects `media_output` from `ModelManager` to always be `bytes` for video jobs. It saves these bytes directly to an .mp4 file.
+        *   **Rationale:** Reflect the change that `ModelManager` provides only byte streams for API-based video generation, streamlining the processing in `generator.py`.

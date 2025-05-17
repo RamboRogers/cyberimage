@@ -86,23 +86,44 @@ def parse_model_config() -> Dict[str, Dict[str, Any]]:
                 options_json = parts[5] if len(parts) > 5 else None
                 name = name.strip()
 
+                # Parse the optional JSON configuration
+                step_config = {} 
+                if options_json:
+                    options_json_stripped = options_json.strip('"\' ') # Clean up outer quotes/spaces
+                    options_json_cleaned = options_json_stripped.replace('\\"', '"')
+                    try:
+                        parsed_options = json.loads(options_json_cleaned)
+                        if isinstance(parsed_options, dict):
+                            step_config = parsed_options
+                        else:
+                           logger.warning(f"Optional config for {key} is not a JSON object: {options_json_cleaned}")
+                    except json.JSONDecodeError as json_err:
+                        logger.warning(f"Invalid JSON in optional config for {key}: {options_json_cleaned} - Error: {json_err}")
+                # else:
+                    # print(f"DEBUG: No options_json found for {key}")
+
                 # Further strip any quotes from individual parts
                 name = name.strip('"\'')
                 repo = repo.strip('"\'')
                 description = description.strip('"\'')
-                source = source.strip('"\'')
+                source_val = source.strip('"\'').lower() # Renamed to avoid conflict with 'source' module, and pre-process
                 requires_auth = requires_auth.strip('"\'')
 
-                # Check if this model is enabled for download
-                download_key = f"DOWNLOAD_MODEL_{model_num}"
-                download_value = os.environ.get(download_key, "true")
-                # Strip quotes from download value too
-                if (download_value.startswith('"') and download_value.endswith('"')) or (download_value.startswith("'") and download_value.endswith("'")):
-                    download_value = download_value[1:-1]
-                download_enabled = download_value.lower() == "true"
+                # Determine if model is enabled based on its type
+                if source_val == "huggingface_api":
+                    download_enabled = step_config.get('download_enabled', True)
+                    logger.info(f"API model {name} is {'enabled' if download_enabled else 'disabled'} for use")
+                else:
+                    # For local models, check DOWNLOAD_MODEL_N environment variable
+                    download_key = f"DOWNLOAD_MODEL_{model_num}"
+                    download_value = os.environ.get(download_key, "true")
+                    # Strip quotes from download value too
+                    if (download_value.startswith('"') and download_value.endswith('"')) or (download_value.startswith("'") and download_value.endswith("'")):
+                        download_value = download_value[1:-1]
+                    download_enabled = download_value.lower() == "true"
 
                 if not download_enabled:
-                    logger.info(f"Model {name} is defined but disabled for download")
+                    logger.info(f"Model {name} is defined but disabled for use")
 
                 # Determine model type from name (heuristic, can be overridden by JSON)
                 heuristic_model_type = "generic" # Start with generic
@@ -117,33 +138,26 @@ def parse_model_config() -> Dict[str, Dict[str, Any]]:
 
                 # Get appropriate file list based on model name or heuristic type
                 files = []
-                if name in common_file_lists:
-                    files = common_file_lists[name]
-                elif heuristic_model_type in common_file_lists:
-                    files = common_file_lists[heuristic_model_type]
+                if source_val != "huggingface_api":  # Only need files for local models
+                    if name in common_file_lists:
+                        files = common_file_lists[name]
+                    elif heuristic_model_type in common_file_lists:
+                        files = common_file_lists[heuristic_model_type]
 
-                # Parse the optional JSON configuration
-                step_config = {}
-                if options_json:
-                    print(f"DEBUG: Raw options_json for {key}: {repr(options_json)}") # DEBUG
-                    options_json = options_json.strip('"\' ') # Clean up outer quotes/spaces
-                    print(f"DEBUG: Stripped options_json for {key}: {repr(options_json)}") # DEBUG
-                    # --- Explicitly replace escaped quotes ---
-                    options_json_cleaned = options_json.replace('\\"', '"')
-                    print(f"DEBUG: Cleaned options_json for {key}: {repr(options_json_cleaned)}") # DEBUG
-                    # --- ---
-                    try:
-                        parsed_options = json.loads(options_json_cleaned) # Use the cleaned string
-                        print(f"DEBUG: Parsed options for {key}: {parsed_options}") # DEBUG
-                        if isinstance(parsed_options, dict):
-                            step_config = parsed_options # Store the entire parsed dict
-                        else:
-                           logger.warning(f"Optional config for {key} is not a JSON object: {options_json_cleaned}")
-                    except json.JSONDecodeError as json_err:
-                        print(f"DEBUG: JSONDecodeError for {key}: {json_err}") # DEBUG
-                        logger.warning(f"Invalid JSON in optional config for {key}: {options_json_cleaned} - Error: {json_err}")
-                else: # DEBUG
-                    print(f"DEBUG: No options_json found for {key}") # DEBUG
+                # If source is huggingface_api, files are not applicable locally
+                if source_val == "huggingface_api":
+                    files = [] # API models don't have local files for completeness check
+                    logger.debug(f"Model {name} is from huggingface_api, setting files to empty list.")
+
+                # Validate provider for huggingface_api source
+                if source_val == "huggingface_api":
+                    if not isinstance(step_config, dict) or "provider" not in step_config:
+                        logger.error(f"Model {name} with source 'huggingface_api' is missing 'provider' in its JSON options. Skipping this model.")
+                        continue
+                    if not isinstance(step_config.get("provider"), str) or not step_config.get("provider").strip():
+                        logger.error(f"Model {name} with source 'huggingface_api' has an invalid or empty 'provider' in its JSON options: '{step_config.get("provider")}'. Skipping this model.")
+                        continue
+                    logger.info(f"Configured API model {name} with provider: {step_config['provider']}")
 
                 # Determine final model type: Explicit JSON type > Heuristic > Default ('image')
                 final_model_type = 'image' # Default to image
@@ -170,12 +184,12 @@ def parse_model_config() -> Dict[str, Dict[str, Any]]:
                 models_config[name] = {
                     "repo": repo.strip(),
                     "description": description.strip(),
-                    "source": source.strip().lower(),
-                    "requires_auth": requires_auth.strip().lower() == "true",
-                    "download_enabled": download_enabled,
+                    "source": source_val, # Use the processed source_val
+                    "requires_auth": requires_auth.lower() == "true",
+                    "download_enabled": download_enabled, # Represents if the model (local or API) is active
                     "type": final_model_type, # Use the determined final type
-                    "files": files,
-                    "step_config": step_config # Add parsed step config
+                    "files": files, # Will be empty for huggingface_api source
+                    "step_config": step_config # Add parsed step config (contains provider for API models)
                 }
 
                 # Store enabled models
@@ -245,17 +259,26 @@ def get_available_models() -> Dict[str, Dict[str, Any]]:
     Returns:
         Dict mapping model names to their UI configurations
     """
-    models = parse_model_config()
+    parsed_models = parse_model_config()
+    ui_models = {}
 
     # Add display information and standardize format for UI
-    for name, config in models.items():
-        # Set the model ID - use the model name as the ID
-        models[name]["id"] = config.get("repo", name)
+    for name, config in parsed_models.items():
+        # Start with a copy of the full original config to preserve all fields
+        model_entry = config.copy()
+        
+        # Set/Override UI-specific fields
+        model_entry["id"] = config.get("repo", name) # Use repo as ID, fallback to name
+        model_entry["name"] = config.get("display_name", name) # Use display_name, fallback to name (original key)
+        
+        # Ensure 'source' is definitely there (it should be from parse_model_config)
+        if 'source' not in model_entry:
+            logger.warning(f"Source field was missing from parsed_config for {name} in get_available_models. This is unexpected.")
+            model_entry['source'] = config.get('source', 'unknown') # Should already be there
 
-        # Set display name
-        models[name]["name"] = config.get("display_name", name)
+        ui_models[name] = model_entry
 
-    return models
+    return ui_models
 
 # --- Rate Limit Configuration ---
 ENABLE_RATE_LIMIT = False  # Set to False to disable IP-based hourly rate limiting

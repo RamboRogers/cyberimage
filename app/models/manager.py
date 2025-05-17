@@ -6,7 +6,7 @@ import sys
 import platform
 import gc
 import os
-from typing import Dict, Optional, Union
+from typing import Dict, Optional, Union, Tuple, List
 import torch
 from diffusers import FluxPipeline, DiffusionPipeline, StableDiffusionPipeline, BitsAndBytesConfig, SD3Transformer2DModel, StableDiffusion3Pipeline, SanaSprintPipeline, WanPipeline
 from app.models import AVAILABLE_MODELS
@@ -17,6 +17,10 @@ import time
 import threading
 from pathlib import Path
 from PIL import Image
+import uuid
+from huggingface_hub import InferenceClient
+import base64 # Added
+from io import BytesIO # Added
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -103,8 +107,27 @@ class ModelManager:
         self._device, self._dtype = get_optimal_device()
         # Add global lock for model management
         self._model_lock = Lock()
-        # Generation is now handled by the GenerationPipeline class
-        # This class only manages loading and unloading models
+
+        # Load HF_TOKEN for API-based models
+        self._hf_token = current_app.config.get('HF_TOKEN')
+        if not self._hf_token:
+            logger.warning("HF_TOKEN not found in config. API-based models using default Hugging Face provider may not be available.")
+        else:
+            logger.info("HF_TOKEN loaded successfully.")
+
+        # Load REPLICATE_API_KEY for Replicate provider
+        self._replicate_api_key = current_app.config.get('REPLICATE_API_KEY')
+        if not self._replicate_api_key:
+            logger.warning("REPLICATE_API_KEY not found in config. Models using Replicate provider will not be available.")
+        else:
+            logger.info("REPLICATE_API_KEY loaded successfully.")
+
+        # Load FAL_AI_API_KEY for fal-ai provider
+        self._fal_ai_api_key = current_app.config.get('FAL_AI_API_KEY')
+        if not self._fal_ai_api_key:
+            logger.warning("FAL_AI_API_KEY not found in config. Models using fal-ai provider will not be available.")
+        else:
+            logger.info("FAL_AI_API_KEY loaded successfully.")
 
         # --- Add Cache Tracking State ---
         self._currently_loaded_model_key: Optional[str] = None
@@ -326,35 +349,36 @@ class ModelManager:
 
         # Add more fixes here as needed
 
-    def get_model(self, model_key: str) -> Optional[Union[FluxPipeline, DiffusionPipeline]]:
+    def get_model(self, model_key: str) -> Optional[Union[FluxPipeline, DiffusionPipeline, LTXPipeline, WanPipeline]]:
         """Get a model by its key, loading it if necessary"""
-        if model_key not in AVAILABLE_MODELS:
-            raise ValueError(f"Unknown model: {model_key}")
+        with self._model_lock: # Ensure thread-safe model loading/unloading
+            model_config = AVAILABLE_MODELS.get(model_key)
+            if not model_config:
+                logger.error(f"Model configuration for '{model_key}' not found.")
+                raise ModelLoadError(f"Model configuration for '{model_key}' not found.")
 
-        with self._model_lock:
-            current_time = time.time()
+            # === ADDED/ENHANCED CHECK FOR ALL API MODELS ===
+            # If it's an API model (any type), it's not loaded locally by this function.
+            if model_config.get('source') == 'huggingface_api':
+                logger.info(f"API model '{model_key}' (type: {model_config.get('type', 'unknown')}) requested in get_model. API models are handled by dedicated API call methods. Returning None.")
+                return None
+            # === END ADDED/ENHANCED CHECK ===
 
-            # --- Enhanced Logging --- #
-            model_info = AVAILABLE_MODELS.get(model_key, {})
-            model_desc = model_info.get("description", "Unknown model")
-            model_type = model_info.get("type", "Unknown type")
-            print(f"\n🧠 MODEL REQUEST: {model_key} - {model_desc} (Type: {model_type})")
-            sys.stdout.flush()
-            # --- End Enhanced Logging --- #
+            if model_key in self._loaded_models:
+                logger.info(f"Model {model_key} found in cache.")
+                return self._loaded_models[model_key]
 
             # --- Check Cache ---
             if (model_key == self._currently_loaded_model_key and
                 model_key in self._loaded_models and
-                (current_time - self._last_used_time < self._cache_duration)):
+                (time.time() - self._last_used_time < self._cache_duration)):
 
                 try:
                     # Verify model is still valid (basic check)
                     model = self._loaded_models[model_key]
                     if hasattr(model, 'device'):
-                        print(f"✅ Using cached model: {model_key} ({model_desc}) - was loaded {current_time - self._last_used_time:.1f}s ago")
-                        sys.stdout.flush()
-                        logger.info(f"Using cached model: {model_key} (last used {current_time - self._last_used_time:.1f}s ago)")
-                        self._last_used_time = current_time # Update last used time on access
+                        logger.info(f"Using cached model: {model_key} (last used {time.time() - self._last_used_time:.1f}s ago)")
+                        self._last_used_time = time.time() # Update last used time on access
                         return model
                     else:
                         logger.warning(f"Cached model {model_key} seems invalid (no device attribute), reloading...")
@@ -365,12 +389,8 @@ class ModelManager:
             # --- Load or Reload Model ---
             # If cache miss, different model, or timeout expired, unload existing and load new
             if self._currently_loaded_model_key:
-                print(f"🔄 Unloading previous model ({self._currently_loaded_model_key}) to load {model_key} ({model_desc})")
-                sys.stdout.flush()
                 logger.info(f"Unloading previous model ({self._currently_loaded_model_key}) to load {model_key}")
             else:
-                print(f"🔄 Loading model: {model_key} ({model_desc}) - Type: {model_type}")
-                sys.stdout.flush()
                 logger.info(f"Loading model: {model_key} (no model currently cached)")
 
             self._unload_all_models() # Clears cache tracking vars too
@@ -523,27 +543,10 @@ class ModelManager:
                             local_files_only=False, # Allow download if missing
                             cache_dir=model_path
                         )
-                        # --- End Wan I2V Logic --- #
-
-                        # --- Conditional Memory Optimization for Video Models --- #
-                        # Check config for explicit offload setting, default to True if not specified
-                        should_offload = model_config.get("step_config", {}).get("offload", True)
-                        # Example: Don't offload specific small models like wan-t2v-1.3b
-                        if model_key == "wan-t2v-1.3b":
-                            should_offload = False
-
-                        if should_offload:
-                            try:
-                                pipe = apply_memory_optimizations(pipe)
-                                logger.info(f"Applied memory optimizations (CPU offload) to video model {model_key}")
-                            except Exception as mem_e:
-                                logger.warning(f"Could not apply standard CPU offload to {model_key}: {mem_e}. Moving to device directly.")
-                                pipe.to(self._device)
-                        else:
-                            logger.info(f"Skipping CPU offload for video model {model_key}, loading directly to {self._device}")
-                            pipe.to(self._device)
-                        # --- End Conditional Optimization --- #
-
+                        # --- Skip CPU offloading for Wan I2V to maximize speed ---
+                        pipe.to(self._device) # Move directly to the target device
+                        logger.info(f"Loaded Wan I2V model ({model_key}) directly to {self._device} (no CPU offload) using dtype: {video_dtype}")
+                        # --- ---
                 elif model_type == "t2v":
                     logger.info(f"Loading Text-to-Video (T2V) model: {model_key}")
                     # --- Use WanPipeline and load VAE separately --- #
@@ -575,6 +578,11 @@ class ModelManager:
 
                 # --- Handle Image Model Types (Existing Logic) ---
                 else:
+                    # Check if this is an API model
+                    if model_config.get('source') == 'huggingface_api':
+                        logger.info(f"Skipping model loading for API model: {model_key}")
+                        return None  # API models don't need to be loaded as pipelines
+
                     # Common configuration for all image models
                     load_config = {
                         "torch_dtype": torch.float16,  # Use float16 for better memory efficiency
@@ -783,6 +791,483 @@ class ModelManager:
             self._force_memory_cleanup()
             raise ModelGenerationError(error_msg)
 
+    def generate_image_from_text(self, model_key: str, prompt: str, **kwargs) -> Tuple[str, Dict]:
+        """Generate an image from text using the specified model"""
+        try:
+            # Enhanced logging
+            model_info = AVAILABLE_MODELS.get(model_key, {})
+            model_desc = model_info.get("description", "Unknown model")
+            print(f"\n🖼️ GENERATING IMAGE with model: {model_key} - {model_desc}")
+            print(f"   • Prompt: {prompt[:100]}" + ('...' if len(prompt) > 100 else ''))
+            
+            # Check if this is an API model
+            if model_info.get('source') == 'huggingface_api':
+                # Get provider from options_json
+                provider = model_info.get('step_config', {}).get('provider')
+                if not provider:
+                    raise ValueError(f"No provider specified for API model {model_key}")
+                
+                # Use InferenceClient for API models
+                from huggingface_hub import InferenceClient
+                client = InferenceClient(token=os.getenv('HF_TOKEN'))
+                
+                # Prepare parameters
+                params = {
+                    "prompt": prompt,
+                    "negative_prompt": kwargs.get("negative_prompt", ""),
+                    "width": kwargs.get("width", 1024),
+                    "height": kwargs.get("height", 1024),
+                    "num_inference_steps": kwargs.get("num_inference_steps", 30),
+                    "guidance_scale": kwargs.get("guidance_scale", 7.5)
+                }
+                
+                print(f"   • Parameters: Steps={params['num_inference_steps']}, Guidance={params['guidance_scale']}, Size={params['width']}x{params['height']}")
+                print(f"   • Using provider: {provider}")
+                sys.stdout.flush()
+                
+                # Generate image using API
+                print(f"\n🚀 Starting image generation with {model_key} via {provider}")
+                sys.stdout.flush()
+                
+                # Get the model ID from the repo field
+                model_id = model_info.get('repo')
+                if not model_id:
+                    raise ValueError(f"No model ID specified for API model {model_key}")
+                
+                # Generate image using InferenceClient
+                result = client.text_to_image(
+                    model=model_id,
+                    **params
+                )
+                
+                print(f"✅ Successfully generated image with model {model_key} via {provider}")
+                sys.stdout.flush()
+                
+                # Convert PIL image to base64 string
+                from io import BytesIO
+                import base64
+                buffered = BytesIO()
+                result.save(buffered, format="PNG")
+                img_str = base64.b64encode(buffered.getvalue()).decode('utf-8')
+                
+                # Return base64 image and metadata
+                return img_str, {
+                    "model": model_key,
+                    "provider": provider,
+                    "parameters": params
+                }
+            
+            # For non-API models, use the existing pipeline approach
+            sys.stdout.flush()
+            # End enhanced logging
+
+            # Extract common parameters
+            negative_prompt = kwargs.get("negative_prompt", "")
+            width = kwargs.get("width", 1024)
+            height = kwargs.get("height", 1024)
+            num_inference_steps = kwargs.get("num_inference_steps", 20)
+            guidance_scale = kwargs.get("guidance_scale", 7.5)
+            seed = kwargs.get("seed", None)
+            output_folder = current_app.config.get('IMAGES_FOLDER', 'app/static/images')
+            Path(output_folder).mkdir(parents=True, exist_ok=True) # Ensure output folder exists
+
+            model_config = AVAILABLE_MODELS.get(model_key)
+            if not model_config:
+                raise ModelGenerationError(f"Model configuration not found for key: {model_key}")
+
+            generated_image_pil = None
+            final_width, final_height = width, height # Initialize with requested dimensions
+
+            # --- Hugging Face API Integration --- # 
+            if model_config.get('source') == 'huggingface_api':
+                logger.info(f"Using Hugging Face API for model: {model_key}")
+                if not self._hf_token and (model_config.get('step_config', {}).get('provider') is None or model_config.get('step_config', {}).get('provider') == "huggingface-inference-api"):
+                    raise ModelGenerationError("HF_TOKEN is not configured. Cannot use API-based models.")
+                if not self._replicate_api_key and model_config.get('step_config', {}).get('provider') == "replicate":
+                    raise ModelGenerationError("REPLICATE_API_KEY is not configured. Cannot use Replicate API-based models.")
+
+                provider = model_config.get('step_config', {}).get('provider')
+                api_model_id = model_config.get('repo') # 'repo' field stores the API model identifier
+
+                if not api_model_id:
+                     raise ModelGenerationError(f"API model ID ('repo') missing in config for {model_key}.")
+
+                logger.info(f"Attempting API call: Provider='{provider}', Model ID='{api_model_id}'")
+                
+                client = None
+                try:
+                    if provider == "replicate":
+                        if not self._replicate_api_key:
+                            raise ModelGenerationError("Replicate API key is missing. Cannot use Replicate provider.")
+                        client = InferenceClient(provider="replicate", api_key=self._replicate_api_key)
+                        logger.debug("Instantiated InferenceClient for Replicate with API key.")
+                    elif provider == "huggingface-inference-api" or provider is None: # Default to HF
+                        if not self._hf_token:
+                            raise ModelGenerationError("Hugging Face token (HF_TOKEN) is missing. Cannot use Hugging Face provider.")
+                        # Provider can be omitted for HF default, or explicitly set
+                        client = InferenceClient(provider=provider if provider else None, token=self._hf_token)
+                        logger.debug(f"Instantiated InferenceClient for Hugging Face provider='{provider if provider else 'default'}' with HF_TOKEN.")
+                    elif provider == "fal-ai":
+                        if not self._hf_token:
+                            raise ModelGenerationError("HF_TOKEN is missing. Cannot use fal-ai provider (authenticated via HF Token).")
+                        client = InferenceClient(provider="fal-ai", api_key=self._hf_token)
+                        logger.debug("Instantiated InferenceClient for fal-ai with HF_TOKEN.")
+                    else:
+                        # Fallback for other potential providers, assuming token-based for now
+                        # This part might need more specific handling if other key-based providers are added
+                        logger.warning(f"Provider '{provider}' specified. Attempting with HF_TOKEN. This provider might require its own API key configuration.")
+                        if not self._hf_token:
+                             raise ModelGenerationError(f"HF_TOKEN is missing, cannot attempt API call for provider '{provider}'.")
+                        client = InferenceClient(provider=provider, token=self._hf_token)
+
+                    api_params = {
+                        "prompt": prompt,
+                        "model": api_model_id, # Pass model identifier to text_to_image
+                        "negative_prompt": negative_prompt if negative_prompt else None,
+                        "width": width,
+                        "height": height,
+                        "num_inference_steps": num_inference_steps,
+                        "guidance_scale": guidance_scale,
+                        "seed": seed if seed is not None else "N/A (API or not set)",
+                    }
+                    logger.debug(f"Calling InferenceClient.text_to_image with params: {api_params}")
+                    generated_image_pil = client.text_to_image(**api_params)
+                    
+                    if not isinstance(generated_image_pil, Image.Image):
+                        logger.error(f"API for {model_key} did not return a PIL Image. Got: {type(generated_image_pil)}")
+                        raise ModelGenerationError(f"Unexpected response type from API for model {model_key}.")
+                    
+                    final_width, final_height = generated_image_pil.size
+                    logger.info(f"Image generated via API ({model_key}) successfully. Size: {final_width}x{final_height}")
+
+                except Exception as e:
+                    logger.error(f"Hugging Face API generation failed for {model_key} (Provider: {provider}, Model: {api_model_id}): {str(e)}")
+                    import traceback # For more detailed error logging
+                    logger.error(traceback.format_exc())
+                    raise ModelGenerationError(f"API generation error for {model_key}: {str(e)}")
+            
+            # --- Local Model Generation --- #
+            else:
+                logger.info(f"Using local model for: {model_key}")
+                # Ensure GPU health before loading/using local model
+                if not self.check_gpu_health():
+                    logger.error("GPU health check failed. Aborting image generation.")
+                    raise ModelGenerationError("GPU is not healthy. Please check logs.")
+
+                pipe = self.get_model(model_key)
+                if pipe is None:
+                    raise ModelLoadError(f"Failed to get model {model_key}")
+
+                # Determine generator for reproducibility if seed is provided
+                generator = torch.Generator(device=self._device).manual_seed(seed) if seed is not None else None
+
+                # --- Specific handling for FLUX models --- # 
+                if model_config.get("type") == "flux" or "flux" in model_key.lower():
+                    logger.info(f"Using FLUX-specific pipeline settings for {model_key}")
+                    # FLUX pipeline uses 'prompt' and directly takes guidance_scale, num_inference_steps
+                    # It might not use negative_prompt in the same way or at all depending on the version.
+                    # The base FLUX.1-schnell doesn't use negative_prompt in its example.
+                    # For FLUX.1-dev, it's usually part of prompt engineering or specific variants.
+                    flux_params = {
+                        "prompt": prompt,
+                        "width": width,
+                        "height": height,
+                        "num_inference_steps": num_inference_steps,
+                        "guidance_scale": guidance_scale, # FLUX uses this
+                        "generator": generator
+                    }
+                    # Only add negative_prompt if it's non-empty and the model might support it (heuristic)
+                    if negative_prompt: # Add if provided, specific FLUX variants might use it
+                         flux_params["negative_prompt"] = negative_prompt
+                    
+                    logger.debug(f"Calling FLUX pipeline with params: {flux_params}")
+                    output = pipe(**flux_params)
+
+                # --- Specific handling for SD3.5 models --- # 
+                elif model_config.get("type") == "sd3" or "sd-3" in model_key.lower():
+                    logger.info(f"Using SD3.5-specific pipeline settings for {model_key}")
+                    sd3_params = {
+                        "prompt": prompt, 
+                        "negative_prompt": negative_prompt if negative_prompt else None,
+                        "width": width, 
+                        "height": height,
+                        "num_inference_steps": num_inference_steps, 
+                        "guidance_scale": guidance_scale,
+                        "generator": generator
+                    }
+                    logger.debug(f"Calling SD3 pipeline with params: {sd3_params}")
+                    output = pipe(**sd3_params)
+
+                # --- Generic Diffusers Pipeline --- # 
+                else:
+                    logger.info(f"Using generic Diffusers pipeline settings for {model_key}")
+                    pipe_params = {
+                        "prompt": prompt,
+                        "negative_prompt": negative_prompt,
+                        "width": width,
+                        "height": height,
+                        "num_inference_steps": num_inference_steps,
+                        "guidance_scale": guidance_scale,
+                        "generator": generator
+                    }
+                    logger.debug(f"Calling generic pipeline with params: {pipe_params}")
+                    output = pipe(**pipe_params)
+
+                generated_image_pil = output.images[0]
+                final_width, final_height = generated_image_pil.size
+                logger.info(f"Image generated locally ({model_key}) successfully. Size: {final_width}x{final_height}")
+
+            # --- Save image and prepare metadata (common for both API and local) --- #
+            if generated_image_pil:
+                # Generate unique filename
+                unique_id = uuid.uuid4()
+                image_filename = f"{model_key.replace('/', '_')}_{unique_id}.png"
+                image_path = Path(output_folder) / image_filename
+
+                # Save the image
+                generated_image_pil.save(image_path, "PNG")
+                logger.info(f"Image saved to {image_path}")
+
+                # Prepare metadata
+                metadata_full = {
+                    "model_key": model_key,
+                    "prompt": prompt,
+                    "negative_prompt": negative_prompt,
+                    "width": final_width, # Use actual dimensions of generated image
+                    "height": final_height, # Use actual dimensions of generated image
+                    "num_inference_steps": num_inference_steps,
+                    "guidance_scale": guidance_scale,
+                    "seed": seed if seed is not None else "N/A (API or not set)",
+                    "source": model_config.get('source', 'unknown'), # Add source to metadata
+                    "provider": model_config.get('step_config', {}).get('provider') if model_config.get('source') == 'huggingface_api' else None,
+                    "image_path": str(image_path),
+                    "filename": image_filename,
+                    "generation_time": time.time() - kwargs.get("start_time", time.time())
+                }
+                # Remove provider from metadata if it's None (for local models)
+                if metadata_full["provider"] is None:
+                    del metadata_full["provider"]
+
+                return str(image_path), metadata_full
+            else:
+                raise ModelGenerationError(f"Image generation failed for {model_key}, no image produced.")
+
+        except ModelLoadError as mle: # Specific exception from get_model
+            logger.error(f"Model loading failed during image generation for {model_key}: {str(mle)}")
+            self._force_memory_cleanup() # Attempt cleanup on load failure
+            raise ModelGenerationError(f"Failed to load model {model_key} for generation: {str(mle)}")
+        except ModelGenerationError: # Re-raise if it's already one of ours
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error during image generation for {model_key}: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
+            # Attempt cleanup for unexpected errors too, as GPU state might be unstable
+            if model_config and model_config.get('source') != 'huggingface_api':
+                 self._force_memory_cleanup()
+            raise ModelGenerationError(f"An unexpected error occurred while generating image with {model_key}: {str(e)}")
+
+    def generate_image_to_video(self, model_key: str, video_prompt: str, source_image_path: str, **kwargs):
+        model_config = AVAILABLE_MODELS.get(model_key)
+        if not model_config:
+            raise ModelLoadError(f"Model {model_key} not found in configuration.")
+
+        # All I2V is now assumed to be API based
+        if model_config.get("source") != "huggingface_api":
+            # This condition should ideally not be met if load_models ensures only API i2v are considered runnable
+            logger.error(f"Model {model_key} is configured for I2V but not as an API model. Local I2V is deprecated.")
+            raise ModelGenerationError(f"Local Image-to-Video for {model_key} is no longer supported. Configure as API model.")
+
+        # API-based I2V generation logic (existing code)
+        try:
+            logger.info(f"🎬 Starting Image-to-Video generation (I2V) with API model: {model_key}")
+            # ... (existing API call logic, parameter extraction, client init, etc.)
+            # Ensure all necessary parameters are passed from kwargs and model_config.options
+            api_token_to_use = self._hf_token
+            api_token_env_var = model_config.get("options", {}).get("api_token_env_var")
+            if api_token_env_var:
+                custom_token = os.getenv(api_token_env_var)
+                if custom_token:
+                    api_token_to_use = custom_token
+                else:
+                    logger.warning(f"api_token_env_var '{api_token_env_var}' specified for model {model_key} but env var not set or empty.")
+        
+            # Get the provider from model_config options to be used in the check
+            current_provider_from_config = model_config.get("options", {}).get("provider")
+
+            # ***** DEBUGGING LOGS START *****
+            logger.info(f"DEBUG I2V/T2V: For model_key='{model_key}', before 'API token not configured' check:")
+            logger.info(f"DEBUG I2V/T2V:   self._hf_token is: {'SET and VALID' if self._hf_token else 'NOT SET or EMPTY'}")
+            logger.info(f"DEBUG I2V/T2V:   model_config.get('options', {{}}).get('api_token_env_var') = '{model_config.get('options', {}).get('api_token_env_var')}'")
+            logger.info(f"DEBUG I2V/T2V:   api_token_to_use (resolved) is: {'SET and VALID' if api_token_to_use else 'NOT SET or EMPTY'}")
+            logger.info(f"DEBUG I2V/T2V:   Provider from model_config.options = '{current_provider_from_config}'")
+            logger.info(f"DEBUG I2V/T2V:   Condition (not api_token_to_use): {not api_token_to_use}")
+            logger.info(f"DEBUG I2V/T2V:   Condition (not current_provider_from_config == 'fal-ai'): {not current_provider_from_config == 'fal-ai'}")
+            # ***** DEBUGGING LOGS END *****
+
+            # This is the problematic check
+            if not api_token_to_use and not current_provider_from_config == "fal-ai":
+                logger.error(f"DEBUG I2V/T2V: Raising 'API token not configured' error. Both conditions TRUE. api_token_to_use:'{api_token_to_use}', provider:'{current_provider_from_config}'")
+                raise ModelGenerationError(f"An API token (HF_TOKEN or custom) is not configured for API model {model_key} and it's not a provider like 'fal-ai' that uses a separate key.")
+
+            # Fal.ai provider for I2V and T2V (using HF_TOKEN)
+            # This 'provider' variable is for the switch-case like logic below, distinct from current_provider_from_config used in the check above.
+            provider = model_config.get("options", {}).get("provider") 
+            hf_model_repo_id = model_config.get("repo")
+            if not hf_model_repo_id:
+                raise ModelGenerationError(f"API model ID (repo) not configured for {model_key}.")
+
+            client = None
+            if provider == "fal-ai":
+                if not self._hf_token:
+                    raise ModelGenerationError(f"HF_TOKEN not configured for model {model_key} using fal-ai provider (authenticated via HF Token).")
+                client = InferenceClient(provider="fal-ai", api_key=self._hf_token)
+                logger.info(f"Using fal-ai provider for I2V model {model_key} with HF_TOKEN.")
+            else:
+                token_to_use = self._hf_token 
+                token_source_log = "default HF_TOKEN"
+                if api_token_env_var:
+                    custom_token = os.getenv(api_token_env_var)
+                    if custom_token:
+                        token_to_use = custom_token
+                        token_source_log = f"token from {api_token_env_var}"
+                    else:
+                        logger.warning(f"Environment variable {api_token_env_var} for {model_key} not found, falling back to HF_TOKEN.")
+                if not token_to_use:
+                    raise ModelGenerationError(f"An API token ({token_source_log}) is not configured for API model {model_key}.")
+                client = InferenceClient(token=token_to_use)
+                logger.info(f"Using {token_source_log} for I2V model {model_key}.")
+
+            logger.info(f"Attempting I2V with API model: {model_key}, provider: {provider or 'default HuggingFace'}")
+
+            pil_image = load_image(source_image_path) # Assuming load_image is defined and returns PIL Image
+            buffered = BytesIO()
+            pil_image.save(buffered, format="PNG")
+            img_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
+            img_data_url = f"data:image/png;base64,{img_base64}"
+
+            payload_input = {
+                "prompt": video_prompt,
+                "image_url": img_data_url,
+            }
+            if kwargs.get("negative_prompt"): payload_input["negative_prompt"] = kwargs["negative_prompt"]
+            if kwargs.get("num_frames") is not None: payload_input["num_frames"] = kwargs["num_frames"]
+            if kwargs.get("fps") is not None: payload_input["fps"] = kwargs["fps"]
+            if kwargs.get("motion_bucket_id") is not None: payload_input["motion_bucket_id"] = kwargs["motion_bucket_id"]
+            if kwargs.get("noise_aug_strength") is not None: payload_input["noise_aug_strength"] = kwargs["noise_aug_strength"]
+            if kwargs.get("seed") is not None: payload_input["seed"] = kwargs["seed"]
+
+            request_payload = {"input": payload_input}
+
+            logger.debug(f"Sending POST request. Model: {hf_model_repo_id}, Payload: {request_payload}")
+            video_bytes = client.post(model=hf_model_repo_id, json=request_payload)
+
+            generation_time = time.time() - kwargs.get("start_time", time.time())
+            logger.info(f"✅ I2V (API) for {model_key} completed in {generation_time:.2f}s, output {len(video_bytes)} bytes.")
+            return video_bytes
+        except Exception as e:
+            logger.error(f"Error during I2V API generation for {model_key}: {e}", exc_info=True)
+            error_msg = f"Failed to generate I2V video with {model_key}: {e}"
+            raise ModelGenerationError(error_msg) from e
+
+    def generate_text_to_video(self, model_key: str, prompt: str, **kwargs):
+        model_config = AVAILABLE_MODELS.get(model_key)
+        if not model_config:
+            raise ModelLoadError(f"Model {model_key} not found in configuration.")
+
+        # All T2V is now assumed to be API based
+        if model_config.get("source") != "huggingface_api":
+            # This condition should ideally not be met if load_models ensures only API t2v are considered runnable
+            logger.error(f"Model {model_key} is configured for T2V but not as an API model. Local T2V is deprecated.")
+            raise ModelGenerationError(f"Local Text-to-Video for {model_key} is no longer supported. Configure as API model.")
+
+        # API-based T2V generation logic (existing code)
+        try:
+            logger.info(f"🎬 Starting Text-to-Video generation (T2V) with API model: {model_key}")
+            # ... (existing API call logic, parameter extraction, client init, etc.)
+            # Ensure all necessary parameters are passed from kwargs and model_config.options
+            hf_model_repo_id = model_config.get("repo")
+            if not hf_model_repo_id:
+                raise ModelGenerationError(f"API model ID (repo) not configured for {model_key}.")
+
+            client = InferenceClient(token=self._hf_token)
+
+            api_params = {}
+            options = model_config.get("options", {})
+            if kwargs.get("num_frames") is not None: api_params["num_frames"] = kwargs["num_frames"]
+            elif options.get("num_frames") is not None: api_params["num_frames"] = options["num_frames"]
+            if kwargs.get("fps") is not None: api_params["num_frames_per_second"] = kwargs["fps"]
+            elif options.get("fps") is not None: api_params["num_frames_per_second"] = options["fps"]
+            if kwargs.get("width") is not None: api_params["width"] = kwargs["width"]
+            elif options.get("width") is not None: api_params["width"] = options["width"]
+            if kwargs.get("height") is not None: api_params["height"] = kwargs["height"]
+            elif options.get("height") is not None: api_params["height"] = options["height"]
+            if kwargs.get("guidance_scale") is not None: api_params["guidance_scale"] = kwargs["guidance_scale"]
+            elif options.get("guidance_scale") is not None: api_params["guidance_scale"] = options["guidance_scale"]
+            if kwargs.get("seed") is not None: api_params["seed"] = kwargs["seed"]
+
+            provider = model_config.get("options", {}).get("provider")
+            client = None
+
+            if provider == "fal-ai":
+                if not self._hf_token:
+                    raise ModelGenerationError(f"HF_TOKEN not configured for model {model_key} using fal-ai provider (authenticated via HF Token).")
+                client = InferenceClient(provider="fal-ai", api_key=self._hf_token)
+                logger.info(f"Using fal-ai provider for T2V model {model_key} with HF_TOKEN.")
+            else:
+                api_token_env_var = model_config.get("options", {}).get("api_token_env_var")
+                token_to_use = self._hf_token 
+                token_source_log = "default HF_TOKEN"
+                if api_token_env_var:
+                    custom_token = os.getenv(api_token_env_var)
+                    if custom_token:
+                        token_to_use = custom_token
+                        token_source_log = f"token from {api_token_env_var}"
+                    else:
+                        logger.warning(f"Environment variable {api_token_env_var} for {model_key} not found, falling back to HF_TOKEN.")
+                if not token_to_use:
+                    raise ModelGenerationError(f"An API token ({token_source_log}) is not configured for API model {model_key}.")
+                client = InferenceClient(token=token_to_use)
+                logger.info(f"Using {token_source_log} for T2V model {model_key}.")
+
+            logger.debug(f"Text-to-Video API call for {model_key} ({hf_model_repo_id}) with params: {api_params}")
+            video_bytes = client.text_to_video(
+                prompt=prompt,
+                model=hf_model_repo_id, 
+                negative_prompt=kwargs.get("negative_prompt"),
+                **api_params
+            )
+            generation_time = time.time() - kwargs.get("start_time", time.time())
+            logger.info(f"✅ T2V (API) for {model_key} completed in {generation_time:.2f}s, output {len(video_bytes)} bytes.")
+            return video_bytes
+        except Exception as e:
+            logger.error(f"Error during T2V API generation for {model_key}: {e}", exc_info=True)
+            error_msg = f"Failed to generate T2V video with {model_key}: {e}"
+            raise ModelGenerationError(error_msg) from e
+
+    def unload_model(self, model_key: str) -> None:
+        """Unload a model from memory"""
+        with self._model_lock:  # Global lock for model management operations
+            if model_key in self._loaded_models:
+                logger.info(f"Unloading model: {model_key}")
+                del self._loaded_models[model_key]
+                if self._device == "cuda":
+                    torch.cuda.empty_cache()
+                    gc.collect()
+
+    def unload_all_models(self) -> None:
+        """Unload all models from memory"""
+        with self._model_lock:  # Global lock for model management operations
+            logger.info("Unloading all models")
+            self._loaded_models.clear()
+            # --- Reset cache tracking on full unload --- #
+            self._currently_loaded_model_key = None
+            self._last_used_time = 0.0
+            # --- End Reset --- #
+            if self._device == "cuda":
+                torch.cuda.empty_cache()
+                gc.collect()
+
     # --- Video Preprocessing Helpers --- #
     def _aspect_ratio_resize(self, image, pipe, max_area=720 * 1280):
         """Resize image while maintaining aspect ratio, ensuring dimensions are multiples.
@@ -819,276 +1304,3 @@ class ModelManager:
         logger.debug(f"Center cropped image to {target_width}x{target_height}")
         return image
     # --- End Video Preprocessing Helpers --- #
-
-    def generate_image_to_video(self, model_key: str, video_prompt: str, source_image_path: str, **kwargs) -> list:
-        """Generate video frames using an Image-to-Video model and a source image."""
-        try:
-            # Enhanced logging
-            model_info = AVAILABLE_MODELS.get(model_key, {})
-            model_desc = model_info.get("description", "Unknown model")
-            print(f"\n🎬 GENERATING I2V VIDEO with model: {model_key} - {model_desc}")
-            print(f"   • Source Image: {source_image_path}")
-            print(f"   • Video Prompt: {video_prompt[:100]}" + ('... ' if len(video_prompt) > 100 else ''))
-
-            # 1. Get model
-            pipe = self.get_model(model_key)
-            if pipe is None:
-                raise ModelLoadError(f"Failed to get video model {model_key}")
-
-            # --- Determine Pipeline Type and Prepare Arguments --- #
-            pipe_args = {}
-            is_ltx_i2v = isinstance(pipe, LTXImageToVideoPipeline)
-
-            if is_ltx_i2v:
-                logger.info("Using LTXImageToVideoPipeline - Preparing specific arguments.")
-                # Load source image directly for LTX
-                source_image = load_image(source_image_path)
-                # --- Use default negative prompt if none provided --- #
-                provided_negative_prompt = kwargs.get("negative_prompt", "")
-                default_negative_prompt = "worst quality, inconsistent motion, blurry, jittery, distorted"
-                negative_prompt = provided_negative_prompt if provided_negative_prompt else default_negative_prompt
-                # --- End default negative prompt --- #
-
-                # Prepare arguments for LTX pipeline (based on reference)
-                pipe_args = {
-                    "image": source_image,
-                    "prompt": video_prompt,
-                    "negative_prompt": negative_prompt,
-                    "width": kwargs.get("width", 704), # Default from LTX reference
-                    "height": kwargs.get("height", 480), # Default from LTX reference
-                    "num_frames": kwargs.get("num_frames", 161), # Default from LTX reference
-                    "num_inference_steps": kwargs.get("num_inference_steps", 50), # Default from LTX reference
-                    "guidance_scale": kwargs.get("guidance_scale", 7.0) # LTX T2V used 7.0, use as default?
-                    # Add other relevant LTX pipeline args from kwargs if needed
-                }
-                print(f"   • LTX Parameters: Steps={pipe_args['num_inference_steps']}, Guidance={pipe_args['guidance_scale']}, Frames={pipe_args['num_frames']}, Size={pipe_args['width']}x{pipe_args['height']}")
-                if negative_prompt:
-                     print(f"   • Negative Prompt: {negative_prompt[:100]}" + ('... ' if len(negative_prompt) > 100 else ''))
-
-            elif isinstance(pipe, WanImageToVideoPipeline):
-                logger.info("Using WanImageToVideoPipeline - Preparing specific arguments.")
-                # --- Existing Wan Preprocessing & Args --- #
-                guidance = kwargs.get("guidance_scale", 5.5)
-                fps = kwargs.get("fps", 16) # FPS used by Wan, not directly by LTX call?
-                print(f"   • Wan Parameters: Guidance={guidance}, FPS={fps}") # FPS is for export, not pipe call
-
-                source_image = load_image(source_image_path)
-                max_area = kwargs.get("max_video_area", 720 * 1280) # Keep max_area for Wan
-                processed_image, height, width = self._aspect_ratio_resize(source_image, pipe, max_area=max_area)
-
-                pipe_args = {
-                    "image": processed_image,
-                    "prompt": video_prompt,
-                    "height": height,
-                    "width": width,
-                    "guidance_scale": guidance
-                    # Add other relevant Wan pipeline args from kwargs if needed
-                }
-                # --- End Wan Logic --- #
-
-            else:
-                # Unknown pipeline type
-                 logger.error(f"Loaded model {model_key} is an unexpected pipeline type: {type(pipe).__name__}")
-                 raise TypeError(f"Model {model_key} is not a supported I2V pipeline type.")
-            # --- End Argument Preparation --- #
-
-            sys.stdout.flush() # Flush logs before generation
-
-            # Log generation start
-            print(f"\n🚀 Starting I2V generation with {model_key} ({type(pipe).__name__})")
-            sys.stdout.flush()
-
-            # 5. Call the pipeline
-            # Assuming both pipelines return frames in `.frames[0]`
-            output_frames = pipe(**pipe_args).frames[0]
-
-            # --- Added DEBUG: Inspect output_frames before returning --- #
-            # (Reusing the same debug block as T2V for consistency)
-            if output_frames is not None and hasattr(output_frames, '__len__') and len(output_frames) > 0:
-                first_frame = output_frames[0]
-                logger.debug(f"I2V generate_image_to_video: output_frames type: {type(output_frames)}")
-                logger.debug(f"I2V generate_image_to_video: first_frame type: {type(first_frame)}")
-                if isinstance(first_frame, torch.Tensor):
-                    logger.debug(f"I2V generate_image_to_video: first_frame tensor dtype: {first_frame.dtype}")
-                    logger.debug(f"I2V generate_image_to_video: first_frame tensor shape: {first_frame.shape}")
-                    if first_frame.dtype.is_floating_point:
-                        logger.debug(f"I2V generate_image_to_video: first_frame tensor min/max: {first_frame.min()}, {first_frame.max()}")
-                elif isinstance(first_frame, Image.Image):
-                    logger.debug(f"I2V generate_image_to_video: first_frame PIL mode: {first_frame.mode}")
-                    logger.debug(f"I2V generate_image_to_video: first_frame PIL size: {first_frame.size}")
-            else:
-                logger.debug("I2V generate_image_to_video: output_frames is None or empty.")
-            # --- End DEBUG --- #
-
-            print(f"✅ Successfully generated {len(output_frames)} frames with model {model_key}")
-            sys.stdout.flush()
-            logger.info(f"Successfully generated {len(output_frames)} frames with model {model_key}")
-
-            # 6. Return frames (PIL Images or Tensors, depending on pipeline)
-            return output_frames
-
-        except Exception as e:
-            error_msg = f"Failed to generate I2V video with {model_key}: {str(e)}"
-            logger.error(error_msg, exc_info=True) # Log traceback
-            # Force cleanup on error
-            self._force_memory_cleanup()
-            raise ModelGenerationError(error_msg)
-
-    def generate_text_to_video(self, model_key: str, prompt: str, **kwargs) -> list:
-        """Generate video frames using a Text-to-Video model."""
-        try:
-            # Enhanced logging
-            model_info = AVAILABLE_MODELS.get(model_key, {})
-            model_desc = model_info.get("description", "Unknown model")
-            model_type = model_info.get("type", "unknown") # Get model type for logic
-            print(f"\n🎬 GENERATING T2V VIDEO with model: {model_key} - {model_desc}")
-            print(f"   • Text Prompt: {prompt[:100]}" + ('... ' if len(prompt) > 100 else ''))
-
-            # Log key parameters from kwargs or defaults
-            guidance = kwargs.get("guidance_scale", 7.0)
-            steps = kwargs.get("num_inference_steps", 50)
-            num_frames = kwargs.get("num_frames", 161) # Default from LTX example
-            width = kwargs.get("width", 704) # Default from LTX example
-            height = kwargs.get("height", 480) # Default from LTX example
-            # --- Use default negative prompt if none provided --- #
-            provided_negative_prompt = kwargs.get("negative_prompt", "")
-            default_negative_prompt = "worst quality, inconsistent motion, blurry, jittery, distorted"
-            negative_prompt = provided_negative_prompt if provided_negative_prompt else default_negative_prompt
-            # --- End default negative prompt --- #
-
-            print(f"   • Parameters: Steps={steps}, Guidance={guidance}, Frames={num_frames}, Size={width}x{height}")
-            if negative_prompt:
-                 print(f"   • Negative Prompt: {negative_prompt[:100]}" + ('... ' if len(negative_prompt) > 100 else ''))
-            sys.stdout.flush()
-            # End enhanced logging
-
-            # 1. Get model (could be LTXPipeline, WanPipeline, etc.)
-            pipe = self.get_model(model_key)
-            if pipe is None:
-                raise ModelLoadError(f"Failed to get T2V model {model_key}")
-
-            # 2. Prepare arguments based on pipeline type
-            pipe_args = {
-                "prompt": prompt,
-                "guidance_scale": guidance,
-                "num_inference_steps": steps,
-                "num_frames": num_frames,
-                "width": width,
-                "height": height,
-                "negative_prompt": negative_prompt # Use the potentially defaulted negative_prompt
-            }
-
-            # Log generation start
-            print(f"\n🚀 Starting T2V generation with {model_key} ({pipe_args['num_inference_steps']} steps)")
-            sys.stdout.flush()
-
-            # 3. Call the pipeline
-            result = pipe(**pipe_args)
-
-            # --- DEBUG: Log result type and attributes ---
-            logger.debug(f"T2V pipe result type: {type(result)}")
-            if hasattr(result, '__dict__'):
-                logger.debug(f"T2V pipe result attributes: {result.__dict__.keys()}")
-            elif hasattr(result, 'keys'):
-                 logger.debug(f"T2V pipe result keys: {result.keys()}")
-
-            if hasattr(result, 'frames'):
-                 logger.debug(f"T2V pipe result.frames type: {type(result.frames)}")
-                 if isinstance(result.frames, (list, np.ndarray)) and hasattr(result.frames, '__len__'):
-                     logger.debug(f"T2V pipe result.frames length: {len(result.frames)}")
-                     if len(result.frames) > 0:
-                        logger.debug(f"T2V pipe result.frames[0] type: {type(result.frames[0])}")
-                        if hasattr(result.frames[0], 'shape'):
-                             logger.debug(f"T2V pipe result.frames[0] shape: {result.frames[0].shape}")
-            # --- END DEBUG ---
-
-            # 4. Extract frames based on expected output structure (Aligned with LTX reference)
-            output_frames = None
-            if hasattr(result, 'frames'):
-                # Reference code uses result.frames[0] directly
-                # Check if it's a non-empty list/array first
-                if isinstance(result.frames, (list, tuple, np.ndarray)) and len(result.frames) > 0:
-                    output_frames = result.frames[0]
-                    logger.info(f"Extracted frames from result.frames[0] (type: {type(output_frames)})")
-                elif result.frames is not None:
-                     # Handle cases where result.frames might be the frames directly
-                     output_frames = result.frames
-                     logger.warning(f"Using result.frames directly as output (type: {type(output_frames)}). Structure might differ from expected result.frames[0].")
-                else:
-                    logger.error("T2V result has 'frames' attribute, but it is empty or None.")
-            elif hasattr(result, 'images'): # Fallback for older/different pipelines
-                output_frames = result.images
-                logger.warning(f"T2V result missing 'frames', falling back to 'images' attribute.")
-            else:
-                 logger.error(f"T2V pipeline {model_key} result object missing 'frames' and 'images' attributes.")
-                 raise ModelGenerationError(f"T2V pipeline {model_key} did not return expected output structure.")
-
-            # Check if extraction failed
-            if output_frames is None:
-                logger.error(f"Failed to extract frames from T2V pipeline result. Result object: {result}")
-                raise ModelGenerationError(f"Failed to extract valid frames from T2V pipeline {model_key} result.")
-
-            # --- Added DEBUG: Inspect output_frames before returning --- #
-            if output_frames is not None and hasattr(output_frames, '__len__') and len(output_frames) > 0:
-                first_frame = output_frames[0]
-                logger.debug(f"T2V generate_text_to_video: output_frames type: {type(output_frames)}")
-                logger.debug(f"T2V generate_text_to_video: first_frame type: {type(first_frame)}")
-                if isinstance(first_frame, torch.Tensor):
-                    logger.debug(f"T2V generate_text_to_video: first_frame tensor dtype: {first_frame.dtype}")
-                    logger.debug(f"T2V generate_text_to_video: first_frame tensor shape: {first_frame.shape}")
-                    # Log min/max ONLY if it's a float tensor to avoid issues with other types
-                    if first_frame.dtype.is_floating_point:
-                        logger.debug(f"T2V generate_text_to_video: first_frame tensor min/max: {first_frame.min()}, {first_frame.max()}")
-                elif isinstance(first_frame, Image.Image):
-                    logger.debug(f"T2V generate_text_to_video: first_frame PIL mode: {first_frame.mode}")
-                    logger.debug(f"T2V generate_text_to_video: first_frame PIL size: {first_frame.size}")
-            else:
-                logger.debug("T2V generate_text_to_video: output_frames is None or empty.")
-            # --- End DEBUG --- #
-
-            # Get number of frames correctly (more robust check)
-            num_generated_frames = 0
-            try:
-                # Try standard len first
-                num_generated_frames = len(output_frames)
-            except TypeError:
-                # Handle cases like single tensors that might not have len()
-                if hasattr(output_frames, 'shape'):
-                    num_generated_frames = output_frames.shape[0] # Assume first dimension is frames
-                else:
-                    logger.warning(f"Could not determine length/frame count from output_frames (type: {type(output_frames)}). Assuming 1 frame.")
-                    num_generated_frames = 1 # Or handle as error if length is critical
-
-            print(f"✅ Successfully generated {num_generated_frames} T2V frames with model {model_key}")
-            sys.stdout.flush()
-            logger.info(f"Successfully generated {num_generated_frames} T2V frames with model {model_key}")
-            return output_frames # Return the frames (NumPy array or List)
-
-        except Exception as e:
-            error_msg = f"Failed to generate T2V video with {model_key}: {str(e)}"
-            logger.error(error_msg, exc_info=True)
-            self._force_memory_cleanup()
-            raise ModelGenerationError(error_msg)
-
-    def unload_model(self, model_key: str) -> None:
-        """Unload a model from memory"""
-        with self._model_lock:  # Global lock for model management operations
-            if model_key in self._loaded_models:
-                logger.info(f"Unloading model: {model_key}")
-                del self._loaded_models[model_key]
-                if self._device == "cuda":
-                    torch.cuda.empty_cache()
-                    gc.collect()
-
-    def unload_all_models(self) -> None:
-        """Unload all models from memory"""
-        with self._model_lock:  # Global lock for model management operations
-            logger.info("Unloading all models")
-            self._loaded_models.clear()
-            # --- Reset cache tracking on full unload --- #
-            self._currently_loaded_model_key = None
-            self._last_used_time = 0.0
-            # --- End Reset --- #
-            if self._device == "cuda":
-                torch.cuda.empty_cache()
-                gc.collect()

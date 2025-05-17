@@ -2038,32 +2038,39 @@ function initializeVideoGenerationModal() {
         try {
             showMainFeedback('Submitting I2V request...', 'info');
 
-            // Check if model exists and is an I2V model
             const selectedModel = availableModels[videoModelId];
             if (!selectedModel) {
                 throw new Error(`Model ${videoModelId} not found`);
             }
 
-            // Check if model is an I2V model either by type property or by ID containing i2v
             if (selectedModel.type !== 'i2v' && !videoModelId.toLowerCase().includes('i2v')) {
                 throw new Error(`Model ${videoModelId} is not an image-to-video model`);
             }
 
-            console.log("Submitting I2V job with model:", selectedModel);
+            const videoGenModalElement = document.getElementById('videoGenModal');
+            const sourceWidth = videoGenModalElement.dataset.sourceWidth;
+            const sourceHeight = videoGenModalElement.dataset.sourceHeight;
+
+            let apiPayload = {
+                source_image_id: sourceId,
+                video_prompt: videoPrompt,
+                video_model_id: videoModelId,
+                guidance_scale: 3.5 // Adjusted and top-level
+            };
+
+            if (sourceWidth && sourceHeight) {
+                apiPayload.width = parseInt(sourceWidth, 10);
+                apiPayload.height = parseInt(sourceHeight, 10);
+            } else {
+                console.warn("Video Gen: Source image dimensions not available. Backend will use defaults for width/height.");
+            }
+
+            console.log("Submitting I2V job with payload:", apiPayload);
 
             const response = await fetch(API_I2V_GEN, { // Use I2V endpoint
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    source_image_id: sourceId,
-                    video_prompt: videoPrompt, // Use video_prompt as expected by API
-                    video_model_id: videoModelId, // Use video_model_id as expected by API
-                    settings: {
-                        guidance_scale: 5.5, // Example
-                        fps: 16, // Example
-                        type: 'video' // Mark as video type in settings
-                    }
-                })
+                body: JSON.stringify(apiPayload) // Use the modified apiPayload
             });
             const result = await response.json();
             if (response.ok && result.job_id) {
@@ -2094,7 +2101,36 @@ function openVideoGenModal(sourceImageId, sourceImageUrl, sourcePrompt) {
 
     // Populate fields
     sourceImageIdInput.value = sourceImageId;
-    sourceImageEl.src = sourceImageUrl || '';
+    // Clear previous dimensions and set up onload for new image
+    delete videoGenModal.dataset.sourceWidth;
+    delete videoGenModal.dataset.sourceHeight;
+
+    sourceImageEl.onload = function() {
+        videoGenModal.dataset.sourceWidth = this.naturalWidth;
+        videoGenModal.dataset.sourceHeight = this.naturalHeight;
+        console.log(`Video Gen Modal: Source image loaded. Dimensions: ${this.naturalWidth}x${this.naturalHeight}`);
+    };
+    sourceImageEl.onerror = function() {
+        console.error("Video Gen Modal: Source image failed to load.");
+        // Ensure dimensions are not carried over if image fails
+        delete videoGenModal.dataset.sourceWidth;
+        delete videoGenModal.dataset.sourceHeight;
+        sourceImageEl.alt = "Failed to load image preview"; // Update alt text
+    };
+    sourceImageEl.src = sourceImageUrl || ''; // Set src after onload/onerror are defined
+    sourceImageEl.alt = "Source image preview"; // Reset alt text
+
+    // If image is already loaded (e.g., from cache), onload might not fire consistently.
+    // So, explicitly set dimensions if already complete and has valid dimensions.
+    if (sourceImageEl.complete && sourceImageEl.naturalWidth && sourceImageEl.naturalWidth > 0) {
+        // Check if onload has already run by checking dataset, to prevent issues if onload also fires
+        if (!videoGenModal.dataset.sourceWidth) { 
+            videoGenModal.dataset.sourceWidth = sourceImageEl.naturalWidth;
+            videoGenModal.dataset.sourceHeight = sourceImageEl.naturalHeight;
+            console.log(`Video Gen Modal: Source image was already complete. Dimensions: ${sourceImageEl.naturalWidth}x${sourceImageEl.naturalHeight}`);
+        }
+    }
+
     sourcePromptEl.textContent = sourcePrompt;
     videoPromptInput.value = sourcePrompt; // Pre-fill with source prompt for convenience
 

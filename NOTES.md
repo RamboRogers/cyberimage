@@ -4,6 +4,7 @@
 - Integrating distinct Text-to-Video and Image-to-Video generation capabilities.
 - Added `/generate_t2v` endpoint.
 - Clarified `/generate_video` endpoint for Image-to-Video.
+- **Video Generation Pipeline Simplification:** Refactored video generation (T2V and I2V) to be API-only.
 
 ## Core Components Tracking
 ### Storage Structure

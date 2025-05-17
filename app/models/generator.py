@@ -19,6 +19,9 @@ from diffusers.utils import export_to_video
 import uuid
 from datetime import datetime
 import numpy as np
+import logging
+
+logger = logging.getLogger(__name__)
 
 # --- Add LTX-Video GGUF Imports --- #
 from diffusers import LTXPipeline, LTXVideoTransformer3DModel
@@ -62,6 +65,10 @@ class GenerationPipeline:
         if hasattr(self, 'is_initialized'):
             return
 
+        # Initialize queue event and processing lock
+        self._queue_event = threading.Event()
+        self._processing_lock = threading.Lock()
+
         # Check if we're in the main process
         self.is_main_process = (
             os.environ.get('WERKZEUG_RUN_MAIN') == 'true' or  # Flask debug mode
@@ -84,6 +91,11 @@ class GenerationPipeline:
             print("\n⚠️ Secondary process - generation disabled")
             sys.stdout.flush()
 
+    def ensure_running(self):
+        """Ensure the pipeline is running, initializing if necessary"""
+        if not self.is_running:
+            self._initialize()
+
     def _initialize(self):
         """Initialize the pipeline components"""
         if self.is_running:
@@ -94,40 +106,32 @@ class GenerationPipeline:
 
         # Reset any stuck jobs from previous runs
         try:
-            # Reset any stalled processing jobs to pending
             reset_count = QueueManager.reset_stalled_jobs()
             if reset_count > 0:
                 print(f"\n⚠️ Reset {reset_count} stalled jobs from previous run to pending status")
                 sys.stdout.flush()
 
-            # Check for pending jobs
             pending_jobs = QueueManager.get_pending_jobs()
             if pending_jobs:
                 print(f"\n📋 Found {len(pending_jobs)} pending jobs")
 
-            # Check for failed jobs that could be retried
             failed_jobs = QueueManager.get_failed_jobs()
             if failed_jobs:
                 print(f"\n🔄 Found {len(failed_jobs)} failed jobs that can be retried")
                 retried_count = 0
-
-                for job in failed_jobs:
-                    # Try to retry the job
-                    job_id = job["id"]
-                    print(f"   - Retrying failed job {job_id} (attempt #{job['retry_count'] + 1})")
+                for job_spec in failed_jobs:
+                    job_id = job_spec["id"]
+                    print(f"   - Retrying failed job {job_id} (attempt #{job_spec['retry_count'] + 1})")
                     retried_job_id = QueueManager.retry_failed_job(job_id)
-
                     if retried_job_id:
                         print(f"   - ✅ Job {job_id} reset to pending state")
                         retried_count += 1
                     else:
                         print(f"   - ❌ Could not retry job {job_id}")
-
                 if retried_count > 0:
                     print(f"✅ Successfully retried {retried_count} failed jobs")
-                    # Trigger the queue processing to pick up the retried jobs
-                    self._queue_event.set()
-
+                    if hasattr(self, '_queue_event') and self._queue_event:
+                        self._queue_event.set()
             sys.stdout.flush()
         except Exception as e:
             print(f"\n❌ Error during queue recovery: {str(e)}")
@@ -137,31 +141,24 @@ class GenerationPipeline:
         self.generation_queue = queue.Queue()
         self.is_running = True
 
-        # Initialize and start the watchdog
         self.watchdog = GPUWatchdog(
             model_manager=self.model_manager,
             app=self._app,
-            max_stalled_time=3600,  # 15 minutes - increased to allow for longer generation times
-            check_interval=60,     # Check every 30 seconds
-            recovery_cooldown=300  # 5 minutes between recoveries
+            max_stalled_time=3600,
+            check_interval=60,
+            recovery_cooldown=300
         )
         self.watchdog.start()
 
-        # Start the background thread
         self.worker_thread = threading.Thread(target=self._process_queue, daemon=True)
         self.worker_thread.start()
 
-        # Trigger initial queue check
-        self._queue_event.set()
+        if hasattr(self, '_queue_event') and self._queue_event:
+            self._queue_event.set()
 
         print("✅ Generation pipeline initialized successfully")
         print("🔄 Queue processor started and waiting for jobs...")
         sys.stdout.flush()
-
-    def ensure_running(self):
-        """Ensure the pipeline is running, initializing if necessary"""
-        if not self.is_running:
-            self._initialize()
 
     def _force_memory_cleanup(self):
         """Force more aggressive memory cleanup"""
@@ -311,23 +308,19 @@ class GenerationPipeline:
                         sys.stdout.flush()
                         QueueManager.update_job_status(job_id, "processing", "Loading T2V model...")
 
-                        # Generate video frames
-                        QueueManager.update_job_status(job_id, "processing", "Generating T2V frames...")
-                        frames = self.model_manager.generate_text_to_video(
+                        # Generate video bytes
+                        QueueManager.update_job_status(job_id, "processing", "Generating T2V media...")
+                        media_output = self.model_manager.generate_text_to_video(
                             job["model_id"],
                             job["prompt"],
                             **core_settings
                         )
 
-                        # Check if frames generation failed or returned empty (Simplified Check)
-                        if frames is None or not hasattr(frames, '__len__') or len(frames) == 0:
-                            raise ValueError("T2V generation returned no valid frames")
+                        if not isinstance(media_output, bytes):
+                            logger.error(f"Unexpected media output type for API-only video job {job_id}: {type(media_output)}. Expected bytes.")
+                            raise Exception(f"Video generation for {job_id} returned unexpected type.")
 
-                        # Save video
-                        QueueManager.update_job_status(job_id, "processing", "Saving T2V video...")
-                        fps = job["settings"].get("fps", 16)
-
-                        # --- Generate Path for Video --- #
+                        video_bytes = media_output
                         video_id = str(uuid.uuid4())
                         today = datetime.utcnow().strftime("%Y/%m/%d")
                         video_dir = os.path.join(current_app.config["IMAGES_PATH"], today)
@@ -335,42 +328,32 @@ class GenerationPipeline:
                         file_name = f"{video_id}.mp4"
                         relative_video_path = os.path.join(today, file_name)
                         output_video_path = os.path.join(video_dir, file_name)
-                        # --- End Path Generation --- #
 
-                        # --- DEBUG: Inspect frames before export (REMOVED CONVERSION) ---
-                        print(f"DEBUG: Before export_to_video - frames type: {type(frames)}")
-                        if isinstance(frames, np.ndarray):
-                            print(f"DEBUG: Frames are ndarray. Shape: {frames.shape}, Dtype: {frames.dtype}")
-                        elif isinstance(frames, list) and len(frames) > 0:
-                            print(f"DEBUG: Frames are list. Length: {len(frames)}, First element type: {type(frames[0])}")
-                        elif torch.is_tensor(frames):
-                            print(f"DEBUG: Frames are tensor. Shape: {frames.shape}, Dtype: {frames.dtype}")
-                        sys.stdout.flush()
-                        # --- End DEBUG ---
+                        with open(output_video_path, "wb") as f:
+                            f.write(video_bytes)
 
-                        export_to_video(frames, output_video_path, fps=fps)
+                        num_frames_generated = job["settings"].get("num_frames", 25)
+                        fps = job["settings"].get("fps", 16)
+                        video_duration_seconds = num_frames_generated / fps if fps > 0 and num_frames_generated > 0 else 0
 
-                        # Prepare metadata for video
-                        duration_seconds = len(frames) / fps
                         video_metadata = {
                             "model_id": job["model_id"],
                             "prompt": job["prompt"],
-                            "settings": job["settings"], # Save all settings including type
+                            "settings": job["settings"],
                             "generation_time": time.time(),
                             "fps": fps,
-                            "duration_seconds": duration_seconds,
-                            "frame_count": len(frames),
-                            "type": "video" # Use generic 'video' type for metadata
+                            "duration_seconds": video_duration_seconds,
+                            "frame_count": num_frames_generated,
+                            "type": "video",
+                            "source": model_info.get('source', 'huggingface_api')
                         }
-
-                        # Save video record using the updated save_image method
                         ImageManager.save_image(None, job_id, video_metadata, image_id=video_id, file_path=relative_video_path)
                         generated_media_ids.append(video_id)
-                        print(f"✅ Saved T2V video: {video_id} with {len(frames)} frames")
+                        print(f"✅ Saved T2V video: {video_id}")
                         sys.stdout.flush()
 
                     # --- Image-to-Video (I2V) Generation --- #
-                    elif job_type == "i2v": # Use the specific type from config/API
+                    elif job_type == "i2v":
                         print(f"🎬 Starting Image-to-Video generation (I2V)")
                         sys.stdout.flush()
 
@@ -385,25 +368,21 @@ class GenerationPipeline:
                         if not source_image_path:
                             raise ValueError(f"I2V source image path not found for ID: {source_image_id}")
 
-                        # Generate video frames from image
-                        QueueManager.update_job_status(job_id, "processing", "Generating I2V frames...")
-                        frames = self.model_manager.generate_image_to_video(
+                        # Generate video bytes from image
+                        QueueManager.update_job_status(job_id, "processing", "Generating I2V media...")
+                        media_output = self.model_manager.generate_image_to_video(
                             job["model_id"],
-                            job["prompt"], # This is the video prompt for I2V
+                            job["prompt"],
                             source_image_path,
-                            max_video_area=480*832, # Limit resolution like reference code
-                            **core_settings # Pass filtered settings
+                            max_video_area=480*832,
+                            **core_settings
                         )
 
-                        # Check if frames generation failed or returned empty (Simplified Check)
-                        if frames is None or not hasattr(frames, '__len__') or len(frames) == 0:
-                            raise ValueError("I2V generation returned no valid frames")
+                        if not isinstance(media_output, bytes):
+                            logger.error(f"Unexpected media output type for API-only video job {job_id}: {type(media_output)}. Expected bytes.")
+                            raise Exception(f"Video generation for {job_id} returned unexpected type.")
 
-                        # Save video
-                        QueueManager.update_job_status(job_id, "processing", "Saving I2V video...")
-                        fps = job["settings"].get("fps", 16)
-
-                        # --- Generate Path for Video --- #
+                        video_bytes = media_output
                         video_id = str(uuid.uuid4())
                         today = datetime.utcnow().strftime("%Y/%m/%d")
                         video_dir = os.path.join(current_app.config["IMAGES_PATH"], today)
@@ -411,42 +390,32 @@ class GenerationPipeline:
                         file_name = f"{video_id}.mp4"
                         relative_video_path = os.path.join(today, file_name)
                         output_video_path = os.path.join(video_dir, file_name)
-                        # --- End Path Generation --- #
 
-                        # --- DEBUG: Inspect frames before export (REMOVED CONVERSION) ---
-                        print(f"DEBUG: Before export_to_video (I2V) - frames type: {type(frames)}")
-                        if isinstance(frames, np.ndarray):
-                            print(f"DEBUG: Frames are ndarray (I2V). Shape: {frames.shape}, Dtype: {frames.dtype}")
-                        elif isinstance(frames, list) and len(frames) > 0:
-                            print(f"DEBUG: Frames are list (I2V). Length: {len(frames)}, First element type: {type(frames[0])}")
-                        elif torch.is_tensor(frames):
-                             print(f"DEBUG: Frames are tensor (I2V). Shape: {frames.shape}, Dtype: {frames.dtype}")
-                        sys.stdout.flush()
-                        # --- End DEBUG ---
+                        with open(output_video_path, "wb") as f:
+                            f.write(video_bytes)
 
-                        export_to_video(frames, output_video_path, fps=fps)
+                        num_frames_generated = job["settings"].get("num_frames", 25)
+                        fps = job["settings"].get("fps", 16)
+                        video_duration_seconds = num_frames_generated / fps if fps > 0 and num_frames_generated > 0 else 0
 
-                        # Prepare metadata for video
-                        duration_seconds = len(frames) / fps
                         video_metadata = {
                             "model_id": job["model_id"],
                             "prompt": job["prompt"],
-                            "settings": job["settings"], # Save all settings including type and source_id
+                            "settings": job["settings"],
                             "generation_time": time.time(),
                             "fps": fps,
-                            "duration_seconds": duration_seconds,
-                            "frame_count": len(frames),
-                            "type": "video" # Use generic 'video' type for metadata
+                            "duration_seconds": video_duration_seconds,
+                            "frame_count": num_frames_generated,
+                            "type": "video",
+                            "source": model_info.get('source', 'huggingface_api'),
+                            "source_image_id": source_image_id
                         }
-
-                        # Save video record using the updated save_image method
                         ImageManager.save_image(None, job_id, video_metadata, image_id=video_id, file_path=relative_video_path)
                         generated_media_ids.append(video_id)
-                        print(f"✅ Saved I2V video: {video_id} with {len(frames)} frames")
+                        print(f"✅ Saved I2V video: {video_id}")
                         sys.stdout.flush()
 
                     # --- Image Generation (Default/Existing) --- #
-                    # This implicitly handles job_type == "image" or if type is missing
                     else:
                         print(f"🖼️ Starting Image generation")
                         sys.stdout.flush()
@@ -459,32 +428,82 @@ class GenerationPipeline:
 
                             QueueManager.update_job_status(job_id, "processing", f"Loading model for image {i+1}/{num_images}...")
 
-                            # Generate the image
-                            QueueManager.update_job_status(job_id, "processing", f"Generating image {i+1}/{num_images}...")
-                            image = self.model_manager.generate_image(
-                                job["model_id"],
-                                job["prompt"],
-                                negative_prompt=job.get("negative_prompt"),
-                                **core_settings
-                            )
+                            job_model_id = job["model_id"]
+                            all_available_models = current_app.config.get("AVAILABLE_MODELS", {})
+                            model_info = all_available_models.get(job_model_id, {})
+                            image_metadata = {}
+                            image = None
 
-                            # Prepare metadata for the image
-                            image_metadata = {
-                                "model_id": job["model_id"],
-                                "prompt": job["prompt"],
-                                "negative_prompt": job.get("negative_prompt"),
-                                "settings": job["settings"], # Save all original settings
-                                "generation_time": time.time(),
-                                "image_number": i + 1,
-                                "total_images": num_images,
-                                "type": "image" # Explicitly store type
-                            }
+                            # --- DEBUGGING --- 
+                            logger.info(f"DEBUG_GENERATOR: Processing job_model_id='{job_model_id}'.")
+                            logger.info(f"DEBUG_GENERATOR: Fetched model_info: {model_info}")
+                            retrieved_source = model_info.get('source')
+                            logger.info(f"DEBUG_GENERATOR: model_info.get('source') is: '{retrieved_source}' (type: {type(retrieved_source)}))")
+                            # --- END DEBUGGING ---
+
+                            if retrieved_source == 'huggingface_api':
+                                # Use generate_image_from_text for API models
+                                logger.info(f"DEBUG_GENERATOR: Taking 'huggingface_api' path for {job_model_id}.") # DEBUG
+                                img_b64_str, api_metadata = self.model_manager.generate_image_from_text(
+                                    job["model_id"],
+                                    job["prompt"],
+                                    negative_prompt=job.get("negative_prompt"),
+                                    **core_settings
+                                )
+                                # Convert base64 string back to PIL Image
+                                from PIL import Image as PILImage # Alias to avoid conflict with local variable 'image'
+                                from io import BytesIO
+                                import base64
+                                try:
+                                    image_data = base64.b64decode(img_b64_str)
+                                    image = PILImage.open(BytesIO(image_data))
+                                except Exception as e:
+                                    logging.error(f"Error decoding base64 image for job {job_id}: {e}")
+                                    # Handle error, maybe raise or skip saving this image
+                                    continue # Skip to next image if decode fails
+
+                                image_metadata = {
+                                    "model_id": job["model_id"],
+                                    "prompt": job["prompt"],
+                                    "negative_prompt": job.get("negative_prompt"),
+                                    "settings": job["settings"], 
+                                    "generation_time": time.time(),
+                                    "image_number": i + 1,
+                                    "total_images": num_images,
+                                    "type": "image",
+                                    "source": "huggingface_api", # Explicitly add source
+                                    "provider": api_metadata.get("provider"),
+                                    "api_parameters": api_metadata.get("parameters")
+                                }
+                            else:
+                                # Use existing generate_image for local models
+                                logger.info(f"DEBUG_GENERATOR: Taking 'else' (local model) path for {job_model_id}. Source was: '{retrieved_source}'") # DEBUG
+                                image = self.model_manager.generate_image(
+                                    job["model_id"],
+                                    job["prompt"],
+                                    negative_prompt=job.get("negative_prompt"),
+                                    **core_settings
+                                )
+                                # Prepare metadata for the image (local model)
+                                image_metadata = {
+                                    "model_id": job["model_id"],
+                                    "prompt": job["prompt"],
+                                    "negative_prompt": job.get("negative_prompt"),
+                                    "settings": job["settings"], 
+                                    "generation_time": time.time(),
+                                    "image_number": i + 1,
+                                    "total_images": num_images,
+                                    "type": "image",
+                                    "source": model_info.get('source', 'local') # Add source for local too
+                                }
 
                             # Save the image with metadata and job ID
-                            image_id = ImageManager.save_image(image, job_id, image_metadata)
-                            generated_media_ids.append(image_id)
-                            print(f"   ✅ Saved image: {image_id} (Image {i+1}/{num_images})")
-                            sys.stdout.flush()
+                            if image: # Ensure image is not None (e.g. if base64 decode failed)
+                                image_id = ImageManager.save_image(image, job_id, image_metadata)
+                                generated_media_ids.append(image_id)
+                                print(f"   ✅ Saved image: {image_id} (Image {i+1}/{num_images})")
+                            else:
+                                print(f"   ⚠️ Failed to generate or decode image {i+1}/{num_images} for job {job_id}")
 
                 finally:
                     # Always mark generation as complete

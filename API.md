@@ -2,7 +2,7 @@
 
 ## Overview
 
-CyberImage provides a RESTful API for generating high-quality images using various AI models. The API supports multiple models, queued generation, and comprehensive status tracking.
+CyberImage provides a RESTful API for generating high-quality images and videos using various AI models. The API supports multiple models, queued generation, and comprehensive status tracking.
 
 ## Base URL
 
@@ -12,7 +12,7 @@ http://localhost:5050/api
 
 ## System Architecture
 
-CyberImage uses a single-threaded processing model for image generation:
+CyberImage uses a single-threaded processing model for image and video generation:
 
 - **Sequential Processing**: Only one generation job is processed at a time
 - **Memory Management**: Models are loaded and unloaded between jobs to maximize available GPU memory
@@ -29,7 +29,7 @@ The API implements rate limiting with the following default settings:
 
 ## Model Context Protocol (MCP) Support
 
-CyberImage now supports the [Model Context Protocol (MCP)](https://spec.modelcontextprotocol.io/specification/2024-11-05/) for AI systems to interact with the image generation capabilities. This enables AI assistants and other systems to generate images through a standardized interface.
+CyberImage now supports the [Model Context Protocol (MCP)](https://spec.modelcontextprotocol.io/specification/2024-11-05/) for AI systems to interact with the image and video generation capabilities. This enables AI assistants and other systems to generate images and videos through a standardized interface.
 
 ### MCP Endpoint
 
@@ -46,6 +46,9 @@ http://localhost:5050/api/mcp
 | `context.image_generation.models` | List available models |
 | `context.image_generation.generate` | Generate images based on a prompt |
 | `context.image_generation.status` | Check generation job status |
+| `context.video_generation.models` | List available video models |
+| `context.video_generation.generate` | Generate videos based on a prompt |
+| `context.video_generation.status` | Check video generation job status |
 
 ### MCP Request Format
 
