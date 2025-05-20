@@ -316,3 +316,18 @@ All planned phases are now complete!
         *   **Change:** Simplified `GenerationPipeline.process_job` for T2V and I2V generation.
         *   **Details:** Removed logic that handled a list of frames and called `export_to_video` for video types. The method now expects `media_output` from `ModelManager` to always be `bytes` for video jobs. It saves these bytes directly to an .mp4 file.
         *   **Rationale:** Reflect the change that `ModelManager` provides only byte streams for API-based video generation, streamlining the processing in `generator.py`.
+
+## [Recent Session] - T2V API Client Fixes and Token Management
+
+- **Goal:** Address errors in Text-to-Video (T2V) generation using the Hugging Face `InferenceClient`, ensure correct API token loading, and improve parameter handling for API calls.
+- **Key Modifications:**
+  - **API Token Loading (`app/__init__.py`):**
+    - Modified `create_app` to load `HF_TOKEN`, `FAL_AI_API_KEY`, and `REPLICATE_API_KEY` from environment variables into `current_app.config`. This makes API keys readily available for different model providers.
+  - **T2V Parameter and Provider Handling (`app/models/manager.py`):**
+    - In the API-based T2V generation logic (around `generate_text_to_video`):
+      - Removed the unsupported `num_frames_per_second` parameter from the `InferenceClient.text_to_video()` call to prevent errors and align with the API.
+      - Corrected the retrieval of the `provider` (e.g., `fal-ai`) to use `step_config.get('provider')` instead of `options.get('provider')`. This ensures the `InferenceClient` is initialized with the correct provider information.
+      - Added debug logging to identify and report any unsupported parameters being passed to the API, facilitating easier debugging.
+- **Affected Files:**
+    - `app/__init__.py`
+    - `app/models/manager.py`

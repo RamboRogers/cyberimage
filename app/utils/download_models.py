@@ -63,7 +63,7 @@ def download_model(models_dir: Path, model_name: str, model_info: dict) -> bool:
     """Download a complete model folder using HuggingFace CLI"""
     try:
         # If it's an API model, no download is needed.
-        if model_info.get("source") == "huggingface_api":
+        if model_info.get("source") in ["huggingface_api", "fal_api"]:
             print_status(f"Skipping download for API model {model_name}: {model_info.get('description', '')}", "info")
             return True
         
@@ -356,7 +356,7 @@ def download_all_models():
         # Check which models need to be downloaded - SIMPLIFIED
         for model_name, model_info in enabled_models.items():
             # Skip API models since they don't require downloading
-            if model_info.get('source') == 'huggingface_api':
+            if model_info.get('source', '').endswith('_api'):
                 print_status(f"Skipping API model {model_name} - no download needed", "info")
                 continue
 

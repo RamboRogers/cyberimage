@@ -63,9 +63,10 @@
         <section class="gallery-content">
             <div class="gallery-grid" data-view="grid">
                 {% for image in images %}
-                {# Metadata is now a dictionary, access directly #}
-                {% set media_type = image.metadata.get('type', 'image') %}
-                {% set is_video = (media_type == 'video') %}
+                {# Determine media_type from image.metadata.type, similar to index.html #}
+                {% set meta_type_from_metadata = image.metadata.get('type', 'image') %}
+                {% set is_video = (meta_type_from_metadata == 'video') %}
+                {% set media_type = 'video' if is_video else 'image' %}
                 {# Retain model_id for display, prompt for alt/copy #}
                 {% set model_id = image.metadata.get('model_id', 'Unknown') %}
                 {% set prompt = image.metadata.get('prompt', '') %}
@@ -198,7 +199,7 @@
         <div class="modal-content">
             <div class="modal-header">
                 <h2>Generate Video from Image</h2>
-                <button class="action-close" aria-label="Close modal" onclick="closeVideoGenModal()">&times;</button>
+                <button class="action-close" aria-label="Close modal">&times;</button>
             </div>
             <div class="modal-body">
                 <div class="video-gen-preview">
@@ -232,7 +233,7 @@
                         <button type="submit" class="button button-generate">
                             <span class="button-icon">▶️</span> Generate Video
                         </button>
-                         <button type="button" class="button button-cancel" onclick="closeVideoGenModal()">Cancel</button>
+                         <button type="button" class="button button-cancel">Cancel</button>
                     </div>
                 </form>
             </div>

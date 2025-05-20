@@ -798,13 +798,17 @@ def get_gallery():
                 except:
                     settings = {}
 
+            # Determine media_type from metadata (settings)
+            media_type = settings.get('type', 'image') # Default to 'image' if 'type' is not in metadata
+
             formatted_images.append({
                 "id": image["id"],
                 "model_id": image["model_id"],
-                "file_path": image["file_path"],
+                "file_path": image["file_path"], # Keep using the direct file_path from DB
                 "prompt": image["prompt"],
                 "created_at": image["created_at"],
-                "settings": settings
+                "settings": settings, # Pass the parsed settings (metadata)
+                "media_type": media_type # Add the determined media_type
             })
 
         return jsonify({

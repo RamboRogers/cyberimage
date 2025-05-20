@@ -46,6 +46,11 @@ def create_app(test_config=None):
         AVAILABLE_MODELS=get_available_models()
     )
 
+    # Load API tokens from environment variables
+    app.config['HF_TOKEN'] = os.getenv('HF_TOKEN')
+    app.config['FAL_AI_API_KEY'] = os.getenv('FAL_AI_API_KEY')
+    app.config['REPLICATE_API_KEY'] = os.getenv('REPLICATE_API_KEY')
+
     # Force single process mode in production
     if not app.debug:
         os.environ["GUNICORN_CMD_ARGS"] = "--workers=1"

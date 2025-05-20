@@ -908,7 +908,7 @@ class ModalManager {
             return;
         }
 
-        const isVideo = galleryItem.classList.contains('gallery-item-video');
+        const isVideo = galleryItem.dataset.mediaType === 'video'; // Prioritize explicit data attribute
 
         // Store reference for navigation
         this.modalContent.dataset.currentImageId = this.currentImageId;
@@ -1197,6 +1197,10 @@ class GalleryManager {
         this.filter = '';
         this.modelFilter = null; // Track model filter for API calls
         this.debugMode = true; // Enable debug mode by default
+        this.submittedVideoJobIds = []; // Added to track video jobs from this session
+        this.videoJobPollingInterval = null; // Added for specific polling interval
+        this.pendingReload = false; // Added for deferred reload
+        this.reloadNotificationTimer = null; // Added for deferred reload notification
 
         // Check for URL parameters
         const urlParams = new URLSearchParams(window.location.search);
@@ -1224,6 +1228,7 @@ class GalleryManager {
         this.setupShortcuts();
         this.setupTouchGestures();
         this.setupVideoHoverPlay();
+        this.setupVideoGenerationForm(); // Added this line
 
         // Load initial images if none are present
         if (this.galleryGrid.querySelectorAll('.gallery-item').length === 0) {
@@ -1630,10 +1635,9 @@ class GalleryManager {
         const displayDate = Utilities.formatDate(createdAt);
         const fullDate = Utilities.formatDateLong(createdAt);
 
-        // Determine media type based on model ID
-        const lowerModelId = modelId.toLowerCase();
-        const isVideo = lowerModelId.includes('t2v') || lowerModelId.includes('i2v');
-        const mediaType = isVideo ? 'video' : 'image';
+        // Determine media type directly from API-provided image.media_type
+        const mediaType = image.media_type || 'image'; // Default to 'image' if undefined
+        const isVideo = mediaType === 'video';
         div.dataset.mediaType = mediaType;
 
         // Highlight search terms in prompt if we have a filter
@@ -1739,11 +1743,21 @@ class GalleryManager {
             } else if (e.target.classList.contains('action-delete')) {
                 e.stopPropagation();
                 this.deleteImage(galleryItem.dataset.mediaId, galleryItem.dataset.mediaType || 'image');
+            } else if (e.target.classList.contains('action-generate-video')) { // Added this block
+                e.stopPropagation();
+                const imageId = galleryItem.dataset.imageId || galleryItem.dataset.mediaId; // Use mediaId as fallback
+                const imagePrompt = e.target.dataset.imagePrompt;
+                if (imageId && imagePrompt) {
+                    this.openVideoGenerationModal(imageId, imagePrompt);
+                } else {
+                    console.error('Missing imageId or imagePrompt for video generation.');
+                    Utilities.showFeedback('Could not initiate video generation: missing data.', 'error');
+                }
             } else if (!e.target.closest('.quick-actions')) {
-                // Show image in modal if not clicking on action buttons
-                const img = galleryItem.querySelector('img');
-                if (img) {
-                    this.modalManager.show(img);
+                // Show image or video in modal if not clicking on action buttons
+                const mediaElement = galleryItem.querySelector('img, video');
+                if (mediaElement) {
+                    this.modalManager.show(mediaElement);
                 }
             }
         });
@@ -2235,6 +2249,327 @@ class GalleryManager {
             }
         });
     }
+
+    /**
+     * Open and prepare the video generation modal
+     * @param {string} imageId - The ID of the source image
+     * @param {string} imagePrompt - The original prompt of the source image
+     */
+    async openVideoGenerationModal(imageId, imagePrompt) {
+        const modal = document.getElementById('videoGenModal');
+        const sourceImageElement = document.getElementById('videoGenSourceImage');
+        const sourcePromptElement = document.getElementById('videoGenSourcePrompt');
+        const sourceImageIdInput = document.getElementById('videoGenSourceImageId');
+        const modelSelect = document.getElementById('videoGenModelSelect');
+        const videoPromptInput = document.getElementById('videoGenPromptInput');
+
+        if (!modal || !sourceImageElement || !sourcePromptElement || !sourceImageIdInput || !modelSelect || !videoPromptInput) {
+            console.error('Video generation modal elements not found.');
+            Utilities.showFeedback('Cannot open video generation modal: UI elements missing.', 'error');
+            return;
+        }
+
+        // Set source image and prompt
+        sourceImageElement.src = window.API.IMAGE(imageId);
+        sourcePromptElement.textContent = imagePrompt;
+        sourceImageIdInput.value = imageId;
+        videoPromptInput.value = ''; // Clear previous video prompt
+
+        // Populate video models
+        modelSelect.innerHTML = '<option value="">Loading models...</option>';
+        modelSelect.disabled = true;
+
+        try {
+            // THIS IS THE KEY LINE FOR FETCHING MODELS FOR THE MODAL
+            const response = await fetch(window.API.MODELS); // Fetch ALL models, client will filter for i2v
+            if (!response.ok) {
+                throw new Error(`Failed to fetch video models (${response.status})`);
+            }
+            const modelsData = await response.json(); 
+            console.log('Gallery.js - Raw modelsData for video modal:', modelsData); // Log the raw data
+
+            modelSelect.innerHTML = '<option value="">Select a video model</option>';
+            let modelAdded = false;
+
+            // Iterate over the object of models directly
+            if (modelsData && modelsData.models && typeof modelsData.models === 'object') {
+                Object.entries(modelsData.models).forEach(([modelId, modelInfo]) => {
+                    const type = modelInfo && modelInfo.type ? modelInfo.type.toLowerCase() : 'undefined';
+                    console.log(`Gallery.js - Checking model: ${modelId}, Type: ${type}, Raw Type: ${modelInfo ? modelInfo.type : 'N/A'}`); // Log each model being checked
+                    
+                    // Ensure we're only adding I2V models.
+                    if (type === 'i2v') {
+                         const option = document.createElement('option');
+                         option.value = modelId; // Use the key (modelId) as value
+                         option.textContent = modelInfo.description || modelId; // Display description or id
+                         modelSelect.appendChild(option);
+                         modelAdded = true;
+                         console.log(`Gallery.js - ADDED model to dropdown: ${modelId}`); // Log when a model is added
+                    } else {
+                        console.log(`Gallery.js - SKIPPED model (not i2v): ${modelId}`); // Log when a model is skipped
+                    }
+                });
+            } else {
+                console.error('Gallery.js - modelsData.models is not a valid object:', modelsData);
+                Utilities.showFeedback('Error: Model data structure is incorrect.', 'error');
+            }
+
+            if (modelAdded) {
+                modelSelect.disabled = false;
+            } else {
+                modelSelect.innerHTML = '<option value="">No I2V models available</option>';
+                Utilities.showFeedback('No I2V models found. Ensure I2V models are configured correctly.', 'warning');
+            }
+        } catch (error) {
+            console.error('Error fetching video models:', error);
+            modelSelect.innerHTML = '<option value="">Error loading models</option>';
+            Utilities.showFeedback(`Error loading video models: ${error.message}`, 'error');
+        }
+
+        modal.style.display = 'flex';
+    }
+
+    /**
+     * Close the video generation modal
+     */
+    closeVideoGenModal() {
+        const modal = document.getElementById('videoGenModal');
+        if (modal) {
+            modal.style.display = 'none';
+        }
+        // Check if a reload was pending when the modal is closed
+        if (this.pendingReload) {
+            this.checkQueueAndReloadIfPending();
+        }
+    }
+
+
+    /**
+     * Set up the form submission for video generation
+     */
+    setupVideoGenerationForm() {
+        const form = document.getElementById('video-generate-form');
+        const modal = document.getElementById('videoGenModal');
+        const videoPromptInput = document.getElementById('videoGenPromptInput'); // Define it here
+
+        if (!form || !modal) {
+            console.error('Video generation form or modal not found.');
+            return;
+        }
+        
+        // Close button listeners
+        modal.querySelector('.action-close').addEventListener('click', () => this.closeVideoGenModal());
+        modal.querySelector('.button-cancel').addEventListener('click', () => this.closeVideoGenModal());
+
+        // Blur listener for video prompt input
+        if (videoPromptInput) {
+            videoPromptInput.addEventListener('blur', () => {
+                if (this.pendingReload) {
+                    // Use a small timeout to allow other click events (like submit) to fire first
+                    setTimeout(() => {
+                        const videoGenModal = document.getElementById('videoGenModal');
+                        const modalIsOpen = videoGenModal && (videoGenModal.style.display === 'flex' || videoGenModal.style.display === 'block');
+                        // Only reload if modal is also closed, or if the blur wasn't to immediately reopen/re-focus something in it
+                        if (!modalIsOpen || document.activeElement !== videoPromptInput) { 
+                             this.checkQueueAndReloadIfPending();
+                        }
+                    }, 100);
+                }
+            });
+        }
+
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const submitButton = form.querySelector('button[type="submit"]');
+            const originalButtonText = submitButton.innerHTML;
+            submitButton.disabled = true;
+            submitButton.innerHTML = '<div class="spinner-tiny"></div> Generating...';
+
+            const formData = new FormData(form);
+            const data = {
+                source_image_id: formData.get('source_image_id'),
+                video_prompt: formData.get('video_prompt'),
+                video_model_id: formData.get('video_model_id') // Changed key from model_id to video_model_id
+            };
+
+            console.log('Gallery.js - Submitting video generation with data:', data); // Log the data being sent
+
+            try {
+                const response = await fetch(window.API.VIDEO_GEN, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json'
+                    },
+                    body: JSON.stringify(data)
+                });
+
+                const result = await response.json();
+
+                if (response.ok && result.job_id) {
+                    Utilities.showFeedback(`Video generation started (Job ID: ${result.job_id}). Check queue.`, 'success');
+                    this.closeVideoGenModal();
+                    updateQueueStatusIndicator(); // Refresh queue status
+
+                    // --- Add job to tracking and start polling if not already active ---
+                    if (result.job_id) {
+                        this.submittedVideoJobIds.push(result.job_id);
+                        if (!this.videoJobPollingInterval) {
+                            this.videoJobPollingInterval = setInterval(() => this.pollSubmittedVideoJobs(), 10000); // Poll every 10 seconds
+                            if (this.debugMode) console.log('GalleryManager: Started polling for submitted video jobs.');
+                        }
+                    }
+                    // --- End --- 
+
+                } else {
+                    throw new Error(result.error || result.message || 'Failed to start video generation.');
+                }
+            } catch (error) {
+                console.error('Error submitting video generation job:', error);
+                Utilities.showFeedback(`Video generation failed: ${error.message}`, 'error');
+            } finally {
+                submitButton.disabled = false;
+                submitButton.innerHTML = originalButtonText;
+            }
+        });
+    }
+
+    /**
+     * Polls the status of video jobs submitted from this gallery session.
+     * If all are done and the main queue is empty, reloads the page.
+     */
+    async pollSubmittedVideoJobs() {
+        if (this.debugMode) console.log('GalleryManager: Polling video job statuses...', this.submittedVideoJobIds);
+
+        if (this.submittedVideoJobIds.length === 0) {
+            if (this.videoJobPollingInterval) {
+                clearInterval(this.videoJobPollingInterval);
+                this.videoJobPollingInterval = null;
+                if (this.debugMode) console.log('GalleryManager: No more video jobs to poll. Polling stopped.');
+            }
+            return;
+        }
+
+        const jobIdsToCheck = [...this.submittedVideoJobIds]; // Create a copy to iterate over
+        let allSessionJobsDone = true;
+
+        for (const jobId of jobIdsToCheck) {
+            try {
+                const response = await fetch(window.API.STATUS(jobId));
+                if (!response.ok) {
+                    console.error(`GalleryManager: Error fetching status for job ${jobId}: ${response.status}`);
+                    allSessionJobsDone = false; // If one fails to fetch, assume not done for safety
+                    continue;
+                }
+                const statusData = await response.json();
+                if (this.debugMode) console.log(`GalleryManager: Status for job ${jobId}:`, statusData.status);
+
+                if (statusData.status === 'completed' || statusData.status === 'failed') {
+                    // Remove from the primary list
+                    this.submittedVideoJobIds = this.submittedVideoJobIds.filter(id => id !== jobId);
+                    Utilities.showFeedback(`Video job ${jobId} completed with status: ${statusData.status}.`, statusData.status === 'completed' ? 'success' : 'error');
+                } else {
+                    allSessionJobsDone = false; // If any job is not completed/failed, not all are done
+                }
+            } catch (error) {
+                console.error(`GalleryManager: Exception fetching status for job ${jobId}:`, error);
+                allSessionJobsDone = false; // Network error, assume not done
+            }
+        }
+
+        if (this.debugMode) console.log('GalleryManager: Post-poll job IDs: ', this.submittedVideoJobIds, 'All session jobs done flag:', allSessionJobsDone);
+
+        // If all jobs *we were tracking* are now removed from the list (i.e., completed or failed)
+        if (this.submittedVideoJobIds.length === 0 && allSessionJobsDone) {
+            if (this.videoJobPollingInterval) {
+                clearInterval(this.videoJobPollingInterval);
+                this.videoJobPollingInterval = null;
+                if (this.debugMode) console.log('GalleryManager: All submitted video jobs from this session are finished. Polling stopped.');
+            }
+            
+            // Now check the main queue status and active input state
+            try {
+                const queueResponse = await fetch(window.API.QUEUE);
+                if (queueResponse.ok) {
+                    const queueData = await queueResponse.json();
+                    const totalActiveInQueue = (queueData.pending || 0) + (queueData.processing || 0);
+                    if (this.debugMode) console.log('GalleryManager: Main queue status - Pending:', queueData.pending, 'Processing:', queueData.processing);
+                    
+                    if (totalActiveInQueue === 0) {
+                        const videoGenModal = document.getElementById('videoGenModal');
+                        const modalIsOpen = videoGenModal && (videoGenModal.style.display === 'flex' || videoGenModal.style.display === 'block');
+                        const videoPromptIsFocused = document.activeElement === document.getElementById('videoGenPromptInput');
+
+                        if (modalIsOpen || videoPromptIsFocused) {
+                            this.pendingReload = true;
+                            this.showPendingReloadNotification("Gallery will refresh with new videos once you close this modal or finish typing.");
+                            if (this.debugMode) console.log('GalleryManager: Deferring reload due to active input in video modal.');
+                        } else {
+                            Utilities.showFeedback('All jobs complete. Reloading gallery...', 'success');
+                            if (this.debugMode) console.log('GalleryManager: All session videos processed and main queue is empty. Reloading page.');
+                            setTimeout(() => { window.location.reload(); }, 1500); // Short delay for feedback to be seen
+                        }
+                    } else {
+                        if (this.debugMode) console.log('GalleryManager: Session videos processed, but main queue still has active jobs. Not reloading yet.');
+                    }
+                } else {
+                     if (this.debugMode) console.error('GalleryManager: Could not fetch main queue status to confirm reload.');
+                }
+            } catch (error) {
+                if (this.debugMode) console.error('GalleryManager: Error fetching main queue status:', error);
+            }
+        }
+    }
+
+    /**
+     * Shows a notification that a reload is pending due to active user input.
+     */
+    showPendingReloadNotification(message) {
+        if (this.reloadNotificationTimer) {
+            clearTimeout(this.reloadNotificationTimer);
+        }
+        Utilities.showFeedback(message, 'info', 15000); // Show for a longer time
+        // No need to set this.reloadNotificationTimer for a self-clearing feedback, 
+        // but if we wanted it to persist until action, we would manage it here.
+    }
+
+    /**
+     * Checks the queue and reloads the page if a reload is pending and conditions are met.
+     */
+    async checkQueueAndReloadIfPending() {
+        if (!this.pendingReload) return;
+
+        // Ensure video modal is not the active input source anymore
+        const videoGenModal = document.getElementById('videoGenModal');
+        const modalIsOpen = videoGenModal && (videoGenModal.style.display === 'flex' || videoGenModal.style.display === 'block');
+        const videoPromptIsFocused = document.activeElement === document.getElementById('videoGenPromptInput');
+
+        if (modalIsOpen || videoPromptIsFocused) {
+            if (this.debugMode) console.log('GalleryManager: checkQueueAndReloadIfPending - still active input, not reloading.');
+            return; // Still active, do nothing
+        }
+
+        try {
+            const queueResponse = await fetch(window.API.QUEUE);
+            if (queueResponse.ok) {
+                const queueData = await queueResponse.json();
+                const totalActiveInQueue = (queueData.pending || 0) + (queueData.processing || 0);
+                if (totalActiveInQueue === 0) {
+                    Utilities.showFeedback('Content updated. Reloading now...', 'success', 2000);
+                    this.pendingReload = false; // Reset flag
+                    if (this.reloadNotificationTimer) clearTimeout(this.reloadNotificationTimer);
+                    if (this.debugMode) console.log('GalleryManager: Pending reload confirmed, queue empty, reloading.');
+                    setTimeout(() => { window.location.reload(); }, 2000);
+                } else {
+                    this.pendingReload = false; // Reset, queue has new items or was not actually empty
+                    if (this.debugMode) console.log('GalleryManager: Pending reload checked, but queue is not empty. Not reloading.');
+                }
+            }
+        } catch (error) {
+            console.error('GalleryManager: Error checking queue for pending reload:', error);
+        }
+    }
 }
 
 // Initialize gallery when DOM is ready
@@ -2311,7 +2646,7 @@ function initializeMobileNav() {
 
         // Close menu when clicking outside
         document.addEventListener('click', (e) => {
-            if (!navToggle.contains(e.target) && !navLinks.contains(e.target)) {
+            if (!navToggle.contains(e.target) && !navLinks.contains(e.target) && !e.target.closest('.video-gen-modal')) { // Add check for video gen modal
                 navToggle.classList.remove('active');
                 navLinks.classList.remove('active');
             }
@@ -2326,3 +2661,25 @@ function initializeMobileNav() {
         });
     }
 }
+
+// Add spinner style for the generate button
+(function() {
+    const style = document.createElement('style');
+    style.textContent = `
+        .spinner-tiny {
+            display: inline-block;
+            width: 1em;
+            height: 1em;
+            border: 2px solid rgba(255,255,255,.3);
+            border-radius: 50%;
+            border-top-color: #fff;
+            animation: spin 1s ease-infinite;
+            margin-right: 0.5em;
+            vertical-align: middle;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+    `;
+    document.head.appendChild(style);
+})();

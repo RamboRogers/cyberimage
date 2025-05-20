@@ -18,6 +18,7 @@ filelock==3.17.0
 Flask==3.1.0
 Flask-Cors==5.0.0
 fsspec==2025.2.0
+fal-client
 gunicorn==23.0.0
 hf_transfer==0.1.9
 huggingface-hub==0.29.1

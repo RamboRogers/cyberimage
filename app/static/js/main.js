@@ -1,3 +1,6 @@
+import { ModalManager } from './modules/modalManager.js';
+import { showMainFeedback } from './modules/uiUtils.js'; // Assuming showMainFeedback is exported from uiUtils
+
 // API endpoints
 const API = {
     BASE: '/api',
@@ -5,310 +8,29 @@ const API = {
     GENERATE: '/api/generate',
     STATUS: (jobId) => `/api/status/${jobId}`,
     IMAGE: (imageId) => `/api/get_image/${imageId}`,
+    VIDEO: (videoId) => `/api/get_video/${videoId}`,
     METADATA: (imageId) => `/api/image/${imageId}/metadata`,
     QUEUE: '/api/queue'
 };
 
 // Global store for available models
+// availableModels is used by ModalManager.openVideoGenerator, ensure it's accessible or passed.
+// For now, keeping it global as ModalManager expects.
 let availableImageModels = {};
-let availableModels = {}; // Added back: Global store for ALL models (used by modals)
+let availableModels = {};
+let submittedJobIdsFromIndexPage = [];
+let indexPageJobPollingInterval = null;
+let pendingIndexPageReload = false;
+let indexReloadNotificationTimer = null;
+// globalCurrentMediaId and globalCurrentMediaType are now managed within ModalManager.js
 
-// --- Revert API endpoint constants ---
 const API_IMAGE_GEN = '/api/generate';
 const API_I2V_GEN = '/api/generate_video';
-const API_T2V_GEN = '/api/generate_t2v'; // <-- ADDED for Text-to-Video
+const API_T2V_GEN = '/api/generate_t2v';
 
-// --- Added global hideModal function --- //
-function hideModal() {
-    const modal = document.getElementById('fullscreenModal');
-    if (modal) {
-        modal.style.display = 'none';
-        document.body.style.overflow = '';
-    }
-}
+// --- All Modal functions (hideModal, showFullscreenMedia, initializeModalHandling, initializeGalleryHandling for modal parts, confirmDeleteMedia, video gen modal functions) are moved to modalManager.js ---
 
-// --- Added Back Missing Function Definitions --- //
-
-// Modal handling
-function initializeModalHandling() {
-    const modal = document.querySelector('.modal'); // General modal selector
-    const fullscreenModal = document.getElementById('fullscreenModal'); // Specific fullscreen modal
-
-    // Close modal when clicking X or outside
-    document.addEventListener('click', (e) => {
-        // Close general modal
-        if (modal && (e.target.classList.contains('close-modal') || e.target === modal)) {
-            modal.classList.remove('visible');
-        }
-        // Close fullscreen modal (using its specific close button or clicking background)
-        if (fullscreenModal && (e.target.classList.contains('action-close') || e.target === fullscreenModal)) {
-             if (fullscreenModal.style.display === 'flex') { // Only hide if visible
-                 hideModal(); // Use the specific hide function for fullscreen
-             }
-        }
-        // Close delete confirm modal
-        const deleteModal = document.getElementById('deleteConfirmModal');
-        if (deleteModal && (e.target.id === 'cancelDelete' || e.target === deleteModal)) {
-             deleteModal.style.display = 'none';
-        }
-        // Close video gen modal (using its specific close button)
-        const videoGenModal = document.getElementById('videoGenModal');
-        if (videoGenModal && e.target.closest('.action-close') && videoGenModal.contains(e.target.closest('.action-close'))) {
-            closeVideoGenModal();
-        }
-
-    });
-
-    // Handle Escape key for fullscreen modal
-    document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape' && fullscreenModal && fullscreenModal.style.display === 'flex') {
-            hideModal();
-        }
-        const deleteModal = document.getElementById('deleteConfirmModal');
-        if (e.key === 'Escape' && deleteModal && deleteModal.style.display === 'block') {
-            deleteModal.style.display = 'none';
-        }
-         const videoGenModal = document.getElementById('videoGenModal');
-         if (e.key === 'Escape' && videoGenModal && videoGenModal.style.display === 'block') {
-            closeVideoGenModal();
-        }
-    });
-}
-
-// Gallery handling with infinite scroll
-function initializeGalleryHandling() {
-    const galleryGrid = document.querySelector('.gallery-grid');
-    const modal = document.getElementById('fullscreenModal');
-    const modalImage = document.getElementById('modalImage');
-    // ADD: Get reference to a video element in the modal
-    const modalVideo = document.getElementById('modalVideo'); // Assumes <video id="modalVideo"> exists in index.html
-    const modelInfo = document.getElementById('modelInfo');
-    const promptInfo = document.getElementById('promptInfo');
-    const settingsInfo = document.getElementById('settingsInfo');
-    const copyPromptBtn = document.getElementById('copyPrompt');
-    const downloadBtn = document.getElementById('downloadImage');
-    const deleteBtn = document.getElementById('deleteImage'); // Get delete button for fullscreen modal
-    const closeBtn = modal?.querySelector('.action-close'); // Safely query close button
-
-    let currentMediaId = null; // Changed from currentImageId
-    let currentMediaType = 'image'; // Added to track type
-
-    // Define hideModal within the scope where modal is defined
-    function hideModal() {
-        if (modal) {
-            modal.style.display = 'none';
-            document.body.style.overflow = '';
-            // ADD: Pause video when closing modal
-            if (modalVideo && !modalVideo.paused) {
-                modalVideo.pause();
-                modalVideo.currentTime = 0; // Optional: reset time
-            }
-            // END ADD
-            currentMediaId = null;
-            currentMediaType = 'image';
-        }
-    }
-
-    // Show fullscreen modal for image or video
-    function showFullscreenMedia(element) { // Renamed from showModal
-        if (!modal || !modalImage || !modalVideo || !modelInfo || !promptInfo || !settingsInfo || !downloadBtn) {
-            console.error("Fullscreen modal elements not found.");
-            return;
-        }
-        const galleryItem = element.closest('.gallery-item');
-        if (!galleryItem) return;
-
-        currentMediaId = galleryItem.dataset.mediaId;
-        currentMediaType = galleryItem.dataset.mediaType || 'image'; // Get type
-
-        if (!currentMediaId) {
-            console.error("No media ID found on gallery item:", galleryItem);
-            return;
-        }
-
-        // Reset and hide elements
-        modalImage.style.display = 'none';
-        modalImage.src = '';
-        modalVideo.style.display = 'none';
-        modalVideo.src = '';
-        if (!modalVideo.paused) modalVideo.pause(); // Pause if playing
-
-        // Set download button text and action based on type
-        const downloadButtonText = currentMediaType === 'video' ? 'Download Video' : 'Download Image';
-        downloadBtn.innerHTML = `<span class="icon">⬇️</span> ${downloadButtonText}`;
-        downloadBtn.dataset.mediaId = currentMediaId; // Store ID for download handler
-        downloadBtn.dataset.mediaType = currentMediaType; // Store type for download handler
-
-        // Display correct element (image or video)
-        if (currentMediaType === 'video') {
-            modalVideo.src = `/api/get_video/${currentMediaId}`;
-            modalVideo.style.display = 'block';
-            modalVideo.load();
-        } else { // Image
-            modalImage.src = `/api/get_image/${currentMediaId}`;
-            modalImage.style.display = 'block';
-        }
-
-        modal.style.display = 'flex';
-        document.body.style.overflow = 'hidden';
-
-        // Reset info sections
-        modelInfo.textContent = 'Loading...';
-        promptInfo.textContent = 'Loading...';
-        settingsInfo.textContent = 'Loading...';
-
-        // Fetch metadata (assuming universal endpoint)
-        fetch(`/api/image/${currentMediaId}/metadata`) // Still using image endpoint, needs verification
-            .then(response => {
-                if (!response.ok) throw new Error(`HTTP error ${response.status}`);
-                return response.json();
-            })
-            .then(data => {
-                modelInfo.textContent = data.model_id || 'Not available';
-                promptInfo.textContent = data.prompt || data.settings?.prompt || 'Not available';
-                const settings = Object.entries(data.settings || {})
-                    .filter(([key]) => key !== 'prompt' && key !== 'negative_prompt') // Filter out prompts
-                    .map(([key, value]) => `${key}: ${JSON.stringify(value)}`)
-                    .join('\n');
-                settingsInfo.textContent = settings || 'Not available';
-            })
-            .catch(error => {
-                console.error('Error fetching media metadata:', error);
-                modelInfo.textContent = 'Metadata unavailable';
-                promptInfo.textContent = 'Metadata unavailable';
-                settingsInfo.textContent = 'Metadata unavailable';
-            });
-    }
-
-    // Event delegation for opening the fullscreen modal
-    if (galleryGrid) {
-        galleryGrid.addEventListener('click', (e) => {
-            const previewElement = e.target.closest('.item-preview img, .item-preview video');
-            if (previewElement) {
-                // Prevent triggering if a button inside quick-actions was clicked
-                if (!e.target.closest('.quick-actions')) {
-                   showFullscreenMedia(previewElement);
-                }
-            }
-        });
-    } else {
-        console.error("Gallery grid not found for event delegation.");
-    }
-
-    // Copy prompt functionality (ensure copyPromptBtn exists) - This is for the modal
-    if (copyPromptBtn) {
-        copyPromptBtn.addEventListener('click', () => {
-            const promptText = promptInfo.textContent;
-            if (promptText && promptText !== 'Loading...' && promptText !== 'Error loading details' && promptText !== 'Metadata unavailable') {
-                // Try to use clipboard API with fallback
-                const copyToClipboard = (text) => {
-                    // First try the modern Clipboard API
-                    if (navigator.clipboard && navigator.clipboard.writeText) {
-                        return navigator.clipboard.writeText(text)
-                            .then(() => true)
-                            .catch(err => {
-                                console.error('Clipboard API failed:', err);
-                                return false;
-                            });
-                    }
-                    // Fall back to older execCommand method
-                    return new Promise(resolve => {
-                        const textarea = document.createElement('textarea');
-                        textarea.value = text;
-                        textarea.style.position = 'fixed';
-                        textarea.style.opacity = '0';
-                        document.body.appendChild(textarea);
-                        textarea.select();
-
-                        try {
-                            const success = document.execCommand('copy');
-                            resolve(success);
-                        } catch (err) {
-                            console.error('execCommand failed:', err);
-                            resolve(false);
-                        } finally {
-                            document.body.removeChild(textarea);
-                        }
-                    });
-                };
-
-                copyToClipboard(promptText).then(success => {
-                    const originalHtml = copyPromptBtn.innerHTML;
-                    if (success) {
-                        copyPromptBtn.innerHTML = '<span class="icon">✓</span>Copied!';
-                    } else {
-                        copyPromptBtn.innerHTML = '<span class="icon">❌</span>Failed';
-                    }
-                    setTimeout(() => { copyPromptBtn.innerHTML = originalHtml; }, 2000);
-                });
-            }
-        });
-    }
-
-    // Download functionality for the MODAL (ensure downloadBtn exists)
-    if (downloadBtn) {
-        downloadBtn.addEventListener('click', async () => {
-            // Retrieve media ID and type from the button's dataset
-            const mediaId = downloadBtn.dataset.mediaId;
-            const mediaType = downloadBtn.dataset.mediaType;
-
-            if (!mediaId || !mediaType) {
-                 console.error("Missing media ID or type for download.");
-                 return;
-            }
-
-            const downloadUrl = mediaType === 'video' ? `/api/get_video/${mediaId}` : `/api/get_image/${mediaId}`;
-            const filename = `cyberimage-${mediaId}.${mediaType === 'video' ? 'mp4' : 'png'}`;
-
-            // Keep original button text
-            const originalButtonHtml = downloadBtn.innerHTML;
-
-            try {
-                // Indicate download start
-                downloadBtn.innerHTML = `<span class="icon">⏳</span> Downloading...`;
-                downloadBtn.disabled = true;
-
-                const response = await fetch(downloadUrl);
-                if (!response.ok) {
-                    throw new Error(`Failed to fetch media: ${response.statusText}`);
-                }
-                const blob = await response.blob();
-                const url = window.URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = filename;
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                window.URL.revokeObjectURL(url);
-
-                // Restore button after a short delay
-                 setTimeout(() => {
-                    downloadBtn.innerHTML = originalButtonHtml;
-                    downloadBtn.disabled = false;
-                 }, 1000); // Restore after 1 second
-
-            } catch (error) {
-                console.error('Download failed:', error);
-                 downloadBtn.innerHTML = `<span class="icon">❌</span> Failed`;
-                 // Restore original button after a longer delay on error
-                 setTimeout(() => {
-                    downloadBtn.innerHTML = originalButtonHtml;
-                    downloadBtn.disabled = false;
-                 }, 3000);
-            }
-        });
-    }
-
-    // Close button for the MODAL (ensure closeBtn exists)
-    if (closeBtn) {
-        closeBtn.addEventListener('click', hideModal);
-    }
-}
-
-// --- End Added Back Missing Function Definitions --- //
-
-// Timer for tracking generation duration
+// Timer for tracking generation duration (KEEPING in main.js for now, or move to generationForm.js later)
 class GenerationTimer {
     constructor(container) {
         this.container = container;
@@ -331,7 +53,6 @@ class GenerationTimer {
                 const seconds = (elapsedSeconds % 60).toString().padStart(2, '0');
                 this.timerDisplay.textContent = `${minutes}:${seconds}`;
             }, 1000);
-            // Immediate update to show 00:00
             this.timerDisplay.textContent = '00:00';
         }
     }
@@ -358,44 +79,71 @@ class GenerationTimer {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-    initializeMobileNav();
+    initializeMobileNav(); // Can be called early
+
     initializeModels().then(() => {
-        // Only initialize form elements after models are loaded
+        // Initialize ModalManager AFTER models are loaded and availableModels is populated
+        ModalManager.initialize({
+            callbacks: {
+                refreshRecentGenerationsSection: refreshRecentGenerationsSection
+            },
+            API: API,
+            availableModels: availableModels, // Now this will have data
+            API_I2V_GEN: API_I2V_GEN
+        });
+
+        // Other initializations that might depend on models or ModalManager
         if (document.getElementById('generate-form')) {
             initializeGenerationForm();
-            initializeModelChange(); // Ensure model change handler is set up
             initializeKeepPromptCheckbox();
-            initializeEnhancedPromptUI(); // For enrich feature
+            initializeEnhancedPromptUI();
         }
-    }).catch(error => {
-        console.error("Failed to initialize models:", error);
-        // Display error to user if needed
-    });
-
-    if (document.querySelector('.gallery-grid')) {
-        initializeGalleryHandling(); // Sets up modal logic
-        initializeGalleryItemActions(); // ADDED: Sets up delegated actions for items
-        initializeInfiniteScroll(); // Make sure this runs after gallery setup
-        initializeVideoHoverPlay(); // ADDED: Enable hover-play for videos
+        // initializeGalleryHandling() removed - Its modal parts are in ModalManager.
+        // Gallery grid click to open fullscreen modal needs to be re-established if not covered by ModalManager's general click handling
+        // For now, relying on ModalManager to handle clicks that should open fullscreen, if HTML is structured correctly.
+        // OR, add a specific listener here if needed:
+        const mainGalleryGrid = document.querySelector('.gallery-grid'); // General selector, might be too broad
+        if (mainGalleryGrid) {
+            mainGalleryGrid.addEventListener('click', (e) => {
+                // Trigger fullscreen for main gallery images/videos when clicking on preview (but not on quick actions)
+                const previewElement = e.target.closest('.item-preview img, .item-preview video');
+                if (previewElement && !e.target.closest('.quick-actions') && !e.target.closest('.action-button')) { // ensure not a button
+                    // Check if the gallery item is from recent generations or a main gallery page
+                    const galleryItem = previewElement.closest('.gallery-item');
+                    if (galleryItem) {
+                        ModalManager.showFullscreen(galleryItem);
+                    }
+                }
+            });
     }
 
     if (document.getElementById('queue-status-text')) {
-        initializeQueueStatusIndicator(); // For queue status in nav
-        initializeQueueStatusPolling(); // Start polling queue status
-    }
+            initializeQueueStatusIndicator();
+            initializeQueueStatusPolling();
+        }
 
-    // Initialize modal handling globally
-    initializeModalHandling();
+        if (document.querySelector('.recent-images .gallery-grid')) {
+            // initializeRecentGenerationsViewer(); // This was mostly a placeholder
+            refreshRecentGenerationsSection(); // Load initial recent items
+            // Event listeners for recent generations actions are set up within appendItemsToRecentGenerations
+        }
 
-    // Initialize Video Generation Modal specific logic
-    if (document.getElementById('videoGenModal')) {
-        initializeVideoGenerationModal();
-    }
+        initializeGalleryItemActions();
 
-    // DEPRECATED - Replaced by initializeGalleryItemActions
-    // if (document.querySelector('.gallery-grid')) {
-    //     initializeCopyPromptButtons(); // Setup copy buttons for existing items initially
-    // }
+        if (submittedJobIdsFromIndexPage.length > 0 && !indexPageJobPollingInterval) {
+            indexPageJobPollingInterval = setInterval(pollSubmittedIndexPageJobs, 5000);
+        }
+
+        const promptInput = document.querySelector('#generation-form #prompt-input');
+        if(promptInput) {
+            promptInput.addEventListener('focus', () => checkQueueAndReloadIfIndexPending());
+            promptInput.addEventListener('blur', () => setTimeout(checkQueueAndReloadIfIndexPending, 100));
+        }
+
+    }).catch(error => {
+        console.error("Failed to initialize models (and subsequently ModalManager):", error);
+        if(typeof showMainFeedback === 'function') showMainFeedback("Error loading critical components. Page functionality may be limited.", "error");
+    });
 });
 
 // Initialize mobile navigation
@@ -408,16 +156,12 @@ function initializeMobileNav() {
             navToggle.classList.toggle('active');
             navLinks.classList.toggle('active');
         });
-
-        // Close menu when clicking outside
         document.addEventListener('click', (e) => {
             if (!navToggle.contains(e.target) && !navLinks.contains(e.target)) {
                 navToggle.classList.remove('active');
                 navLinks.classList.remove('active');
             }
         });
-
-        // Close menu when clicking a link
         navLinks.querySelectorAll('.nav-link').forEach(link => {
             link.addEventListener('click', () => {
                 navToggle.classList.remove('active');
@@ -427,7 +171,6 @@ function initializeMobileNav() {
     }
 }
 
-// Initialize available models (Corrected declaration scope)
 async function initializeModels() {
     try {
         const response = await fetch(API.MODELS);
@@ -435,76 +178,67 @@ async function initializeModels() {
         const modelSelect = document.querySelector('select[name="model"]');
 
         if (data.models) {
-            availableImageModels = {}; // Clear previous image models
-            availableModels = {}; // Reset the global store here
-            const mainFormModels = {}; // Store models specifically for the main form dropdown (T2I & T2V)
-
-            console.log("Models loaded from API:", data.models);
-
+            availableModels = {}; // Reset the global store
+            const mainFormModels = {};
             Object.entries(data.models).forEach(([id, info]) => {
-                const modelType = info.type || 'image'; // Default to image if type is missing
-                // Store ALL models in the global availableModels for use elsewhere (modals)
-                availableModels[id] = {
-                    ...info,
-                    id: id,
-                    type: modelType
-                };
-
-                // Store models suitable for the main generation form (T2I and T2V)
+                const modelType = info.type || 'image';
+                availableModels[id] = { ...info, id: id, type: modelType };
                 if (modelType === 'image' || modelType === 't2v') {
-                    mainFormModels[id] = {
-                       ...info,
-                       id: id,
-                       type: modelType
-                    };
+                    mainFormModels[id] = { ...info, id: id, type: modelType };
                 }
             });
 
-            console.log("Models for main form (T2I/T2V):", mainFormModels);
-            console.log("All available models (global store):", availableModels);
-
-            // Populate the main model select with T2I and T2V models
             if (modelSelect) {
                 modelSelect.innerHTML = '<option value="">Select Model</option>';
-                const modelsDataStore = {}; // Store full data for the selected models
-
+                const modelsDataStore = {};
+                const localModels = [];
+                const apiModels = [];
                 Object.entries(mainFormModels).forEach(([id, info]) => {
+                    modelsDataStore[id] = info;
+                    if (info.source === 'huggingface_api' || info.source === 'fal_api') {
+                        apiModels.push({ id, ...info });
+                    } else {
+                        localModels.push({ id, ...info });
+                    }
+                });
+                localModels.forEach(info => {
                     const option = document.createElement('option');
-                    option.value = id;
-                    // Indicate model type in the dropdown text
+                    option.value = info.id;
                     const typeLabel = info.type === 't2v' ? '[Video]' : '[Image]';
-                    option.textContent = `${id} ${typeLabel} - ${info.description}`;
-                    modelsDataStore[id] = info; // Store full info including type
-                    if (id === data.default) option.selected = true; // Select default if applicable
+                    option.textContent = `${info.id} ${typeLabel} - ${info.description}`;
+                    if (info.id === data.default) option.selected = true;
                     modelSelect.appendChild(option);
                 });
-
+                apiModels.forEach(info => {
+                    const option = document.createElement('option');
+                    option.value = info.id;
+                    const typeLabel = info.type === 't2v' ? '[Video]' : '[Image]';
+                    const apiProvider = info.provider || (info.source === 'fal_api' ? 'Fal.ai' : 'Default');
+                    option.textContent = `${info.id} ${typeLabel} - ${info.description} (API: ${apiProvider})`;
+                    if (info.id === data.default && !modelSelect.querySelector('option[selected]')) option.selected = true;
+                    modelSelect.appendChild(option);
+                });
                 const lastModelId = localStorage.getItem('lastModelId');
                 if (lastModelId && modelSelect.querySelector(`option[value="${lastModelId}"]`)) {
                     modelSelect.value = lastModelId;
                 }
-
                 modelSelect.addEventListener('change', () => handleModelChange(modelsDataStore));
-                handleModelChange(modelsDataStore); // Trigger initial change
+                handleModelChange(modelsDataStore);
             }
-
         } else {
              console.error('Model data structure unexpected:', data);
         }
     } catch (error) {
         console.error('Error loading models:', error);
+        throw error;
     }
 }
 
-// Updated handleModelChange to adjust UI based on model type (T2I vs T2V)
 function handleModelChange(modelsDataStore) {
     const modelSelect = document.querySelector('select[name="model"]');
     if (!modelSelect) return;
-
     const selectedModelId = modelSelect.value;
     const selectedModelData = modelsDataStore ? modelsDataStore[selectedModelId] : null;
-
-    // Get references to relevant form elements
     const negativePromptGroup = document.querySelector('.input-group:has(#negative-prompt)');
     const stepsSlider = document.getElementById('steps');
     const stepsValueDisplay = document.getElementById('steps-value');
@@ -517,91 +251,63 @@ function handleModelChange(modelsDataStore) {
     const numImagesGroup = document.querySelector('.input-group.image-only-setting');
     const widthSelect = document.getElementById('width');
     const heightSelect = document.getElementById('height');
-
-    // Default values (can be adjusted)
     const defaults = {
         image: { steps: 30, guidance: 7.5, width: 1024, height: 1024 },
         t2v:   { steps: 50, guidance: 7.0, width: 704, height: 480, frames: 161 }
-        // Add other model type defaults if needed
     };
 
     if (selectedModelId && selectedModelData) {
-        const modelType = selectedModelData.type || 'image'; // Get model type
+        const modelType = selectedModelData.type || 'image';
         const isT2V = modelType === 't2v';
-        const isFluxModel = selectedModelId.toLowerCase().includes('flux'); // Keep Flux specific logic
-
-        // 1. Update Generate Button Text
+        const isFluxModel = selectedModelId.toLowerCase().includes('flux');
         if (generateButton) {
             generateButton.innerHTML = isT2V
                 ? '<span class="button-icon">🎬</span> Generate Video'
                 : '<span class="button-icon">⚡</span> Generate Image';
         }
-
-        // 2. Show/Hide Settings Groups
-        if (t2vFramesGroup) {
-            t2vFramesGroup.classList.toggle('hidden', !isT2V);
-        }
-        if (numImagesGroup) {
-            numImagesGroup.classList.toggle('hidden', isT2V);
-        }
-
-        // 3. Handle Negative Prompt (Keep Flux logic)
+        if (t2vFramesGroup) t2vFramesGroup.classList.toggle('hidden', !isT2V);
+        if (numImagesGroup) numImagesGroup.classList.toggle('hidden', isT2V);
         if (negativePromptGroup) {
             negativePromptGroup.style.display = isFluxModel ? 'none' : 'block';
-            if (isFluxModel) {
-                negativePromptGroup.querySelector('textarea').value = '';
+            if (isFluxModel) negativePromptGroup.querySelector('textarea').value = '';
             }
-        }
-
-        // 4. Update Sliders and Selects based on type
         const currentDefaults = defaults[modelType] || defaults.image;
-
-        // --- Steps ---
         if (stepsSlider && stepsValueDisplay) {
             const stepConfig = selectedModelData.step_config || {};
-            let currentSteps = null;
+            let currentStepsVal = null;
             stepsSlider.disabled = false;
             stepsSlider.classList.remove('disabled');
-
-            // Override ranges/defaults if needed based on model or type
-            // Example: Set different defaults for T2V
-            stepsSlider.min = stepConfig.steps?.min ?? (isT2V ? 10 : 20); // T2V might allow fewer steps
+            stepsSlider.min = stepConfig.steps?.min ?? (isT2V ? 10 : 20);
             stepsSlider.max = stepConfig.steps?.max ?? (isT2V ? 60 : 50);
-            currentSteps = stepConfig.steps?.default ?? currentDefaults.steps;
-
+            currentStepsVal = stepConfig.steps?.default ?? currentDefaults.steps;
             if (stepConfig.fixed_steps !== undefined) {
-                 currentSteps = stepConfig.fixed_steps;
-                 stepsSlider.value = currentSteps;
-                 stepsSlider.min = currentSteps;
-                 stepsSlider.max = currentSteps;
+                 currentStepsVal = stepConfig.fixed_steps;
+                 stepsSlider.value = currentStepsVal;
+                 stepsSlider.min = currentStepsVal;
+                 stepsSlider.max = currentStepsVal;
                  stepsSlider.disabled = true;
                  stepsSlider.classList.add('disabled');
             } else {
-                // Try to load last value, ensuring it's within new bounds
                 const lastStepsValue = localStorage.getItem('lastStepsValue');
-                if (lastStepsValue !== null && Number(lastStepsValue) >= stepsSlider.min && Number(lastStepsValue) <= stepsSlider.max) {
+                if (lastStepsValue !== null && Number(lastStepsValue) >= parseFloat(stepsSlider.min) && Number(lastStepsValue) <= parseFloat(stepsSlider.max)) {
                     stepsSlider.value = Number(lastStepsValue);
                 } else {
-                    stepsSlider.value = currentSteps;
+                    stepsSlider.value = currentStepsVal;
                 }
             }
             stepsValueDisplay.textContent = stepsSlider.value;
             localStorage.setItem('lastStepsValue', stepsSlider.value);
         }
-
-        // --- Guidance ---
         if (guidanceSlider && guidanceValueDisplay) {
             const guidanceConfig = selectedModelData.step_config?.guidance || {};
             guidanceSlider.disabled = false;
             guidanceSlider.classList.remove('disabled');
-
             guidanceSlider.min = guidanceConfig.min ?? (isT2V ? 1 : 1);
             guidanceSlider.max = guidanceConfig.max ?? (isT2V ? 10 : 20);
             guidanceSlider.step = guidanceConfig.step ?? (isT2V ? 0.1 : 0.5);
             let currentGuidance = guidanceConfig.default ?? currentDefaults.guidance;
-
             const lastGuidanceValue = localStorage.getItem('lastGuidanceValue');
-            if (lastGuidanceValue !== null && Number(lastGuidanceValue) >= guidanceSlider.min && Number(lastGuidanceValue) <= guidanceSlider.max) {
+            if (lastGuidanceValue !== null && Number(lastGuidanceValue) >= parseFloat(guidanceSlider.min) && Number(lastGuidanceValue) <= parseFloat(guidanceSlider.max)) {
                 guidanceSlider.value = Number(lastGuidanceValue);
             } else {
                 guidanceSlider.value = currentGuidance;
@@ -609,42 +315,25 @@ function handleModelChange(modelsDataStore) {
             guidanceValueDisplay.textContent = guidanceSlider.value;
             localStorage.setItem('lastGuidanceValue', guidanceSlider.value);
         }
-
-        // --- Width/Height ---
         if (widthSelect && heightSelect) {
-            // Set default value based on type
-            if (!widthSelect.querySelector(`option[value="${currentDefaults.width}"]`)) {
-                 console.warn(`Width option ${currentDefaults.width} not found for ${modelType} model.`);
-            }
-            if (!heightSelect.querySelector(`option[value="${currentDefaults.height}"]`)) {
-                 console.warn(`Height option ${currentDefaults.height} not found for ${modelType} model.`);
-            }
+            if (!widthSelect.querySelector(`option[value="${currentDefaults.width}"]`)) console.warn(`Width option ${currentDefaults.width} not found for ${modelType} model.`);
+            if (!heightSelect.querySelector(`option[value="${currentDefaults.height}"]`)) console.warn(`Height option ${currentDefaults.height} not found for ${modelType} model.`);
             widthSelect.value = currentDefaults.width;
             heightSelect.value = currentDefaults.height;
-            // Note: We are not saving/loading last width/height from localStorage currently
         }
-
-        // --- Num Frames (T2V only) ---
         if (isT2V && numFramesSlider && numFramesValueDisplay) {
-            const framesConfig = selectedModelData.step_config?.frames || {}; // Check for specific frame config
+            const framesConfig = selectedModelData.step_config?.frames || {};
             numFramesSlider.min = framesConfig.min ?? 5;
-            numFramesSlider.max = framesConfig.max ?? 161; // LTX Max
+            numFramesSlider.max = framesConfig.max ?? 161;
             numFramesSlider.step = framesConfig.step ?? 4;
-            let currentFrames = framesConfig.default ?? currentDefaults.frames;
-
-            // Maybe load last value? For now, set default
-            numFramesSlider.value = currentFrames;
+            numFramesSlider.value = framesConfig.default ?? currentDefaults.frames;
             numFramesValueDisplay.textContent = numFramesSlider.value;
-            // Not saving to localStorage for now
         }
-
     } else {
-        // Reset to image defaults if no model selected
         if (generateButton) generateButton.innerHTML = '<span class="button-icon">⚡</span> Generate Image';
         if (t2vFramesGroup) t2vFramesGroup.classList.add('hidden');
         if (numImagesGroup) numImagesGroup.classList.remove('hidden');
         if (negativePromptGroup) negativePromptGroup.style.display = 'block';
-
         const imgDefaults = defaults.image;
         if (stepsSlider && stepsValueDisplay) { stepsSlider.min = 20; stepsSlider.max = 50; stepsSlider.value = imgDefaults.steps; stepsSlider.disabled = false; stepsValueDisplay.textContent = imgDefaults.steps; localStorage.setItem('lastStepsValue', imgDefaults.steps); }
         if (guidanceSlider && guidanceValueDisplay) { guidanceSlider.min = 1; guidanceSlider.max = 20; guidanceSlider.step = 0.5; guidanceSlider.value = imgDefaults.guidance; guidanceValueDisplay.textContent = imgDefaults.guidance; localStorage.setItem('lastGuidanceValue', imgDefaults.guidance); }
@@ -653,65 +342,46 @@ function handleModelChange(modelsDataStore) {
     localStorage.setItem('lastModelId', selectedModelId);
 }
 
-// Initialize generation form handling
 function initializeGenerationForm() {
     const form = document.getElementById('generate-form');
     if (!form) return;
-
     const feedbackSection = form.querySelector('.generation-feedback');
     if (!feedbackSection) {
         console.error('Feedback section not found');
         return;
     }
-
-    // Remove any inline display:none style and ensure visibility
     feedbackSection.removeAttribute('style');
-    feedbackSection.style.display = 'block';
-
+    feedbackSection.style.display = 'block'; // Should be controlled by active class
     const timer = new GenerationTimer(feedbackSection);
     const statusText = feedbackSection.querySelector('.status-text');
-    const queuePosition = feedbackSection.querySelector('.queue-position');
-    const estimatedTime = feedbackSection.querySelector('.estimated-time');
     const timerContainer = feedbackSection.querySelector('.generation-timer');
-    const generateButton = form.querySelector('.button-generate'); // Get generate button
+    const generateButton = form.querySelector('.button-generate');
 
-    // Initialize general sliders
     const sliders = form.querySelectorAll(':scope > .form-layout .settings-col .slider');
     sliders.forEach(slider => {
         const display = slider.nextElementSibling;
-        if (display) {
+        if (display && display.classList.contains('value-display')) {
             display.textContent = slider.value;
             slider.addEventListener('input', () => { display.textContent = slider.value; });
         }
     });
-
-    // Load/save steps slider
     const stepsSlider = document.getElementById('steps');
-    const stepsValueDisplay = document.getElementById('steps-value');
-    if (stepsSlider && stepsValueDisplay) {
-        stepsSlider.addEventListener('input', () => { localStorage.setItem('lastStepsValue', stepsSlider.value); stepsValueDisplay.textContent = stepsSlider.value; });
-        }
-    // Load/save guidance slider
+    if (stepsSlider) stepsSlider.addEventListener('input', () => { localStorage.setItem('lastStepsValue', stepsSlider.value); });
     const guidanceSlider = document.getElementById('guidance');
-    const guidanceValueDisplay = document.getElementById('guidance-value');
-     if (guidanceSlider && guidanceValueDisplay) {
-        guidanceSlider.addEventListener('input', () => { localStorage.setItem('lastGuidanceValue', guidanceSlider.value); guidanceValueDisplay.textContent = guidanceSlider.value; });
-    }
+    if (guidanceSlider) guidanceSlider.addEventListener('input', () => { localStorage.setItem('lastGuidanceValue', guidanceSlider.value); });
 
-    // Initialize T2V frames slider listener
-    const numFramesSlider = document.getElementById('num_frames');
-    const numFramesValueDisplay = document.getElementById('num_frames-value');
-    if (numFramesSlider && numFramesValueDisplay) {
-        numFramesSlider.addEventListener('input', () => { numFramesValueDisplay.textContent = numFramesSlider.value; });
-        // Note: We are NOT saving this to localStorage currently
-    }
+    ['prompt-input', 'negative-prompt'].forEach(id => {
+        const inputElement = document.getElementById(id);
+        if (inputElement) {
+            inputElement.addEventListener('blur', () => {
+                if (pendingIndexPageReload) {
+                    setTimeout(() => { checkQueueAndReloadIfIndexPending(); }, 100);
+                }
+            });
+        }
+    });
+    if (generateButton) generateButton.innerHTML = '<span class="button-icon">⚡</span> Generate Image';
 
-    // Set button text back to Image explicitly (will be updated by handleModelChange)
-    if (generateButton) {
-        generateButton.innerHTML = '<span class="button-icon">⚡</span> Generate Image';
-    }
-
-    // Handle form submission (MODIFIED to handle T2I and T2V)
     form.addEventListener('submit', async (e) => {
         e.preventDefault();
         const submitButton = form.querySelector('.button-generate');
@@ -719,853 +389,168 @@ function initializeGenerationForm() {
         feedbackSection.style.display = 'none';
         feedbackSection.classList.remove('active');
 
-        // Save model/steps/guidance state
         const currentModelId = document.getElementById('model')?.value;
-        const currentStepsValue = document.getElementById('steps')?.value;
-        const currentGuidanceValue = document.getElementById('guidance')?.value;
         if (currentModelId) localStorage.setItem('lastModelId', currentModelId);
-        if (currentStepsValue) localStorage.setItem('lastStepsValue', currentStepsValue);
-        if (currentGuidanceValue) localStorage.setItem('lastGuidanceValue', currentGuidanceValue);
-
-        // Save prompt if keep prompt checked
         const keepPromptCheckbox = document.getElementById('keep_prompt');
         if (keepPromptCheckbox && keepPromptCheckbox.checked) {
-            const promptInput = document.getElementById('prompt-input');
-            localStorage.setItem('keptPrompt', promptInput.value);
+            localStorage.setItem('keptPrompt', document.getElementById('prompt-input').value);
             }
 
-        let modelType = 'image'; // Default model type
-        let originalButtonHtml = '<span class="button-icon">⚡</span> Generate Image'; // Default button text
+        let modelType = 'image';
+        let feedbackTypeText = 'Image';
 
         try {
             const formData = new FormData(form);
             const prompt = formData.get('prompt');
             const modelId = formData.get('model');
-
-            // Determine Model Type and prepare request
-            let apiUrl = '';
-            let requestData = {};
-            let numOutputs = 1;
-            let feedbackType = 'Image'; // For user messages
-
             const selectedModelInfo = availableModels[modelId];
-            if (!selectedModelInfo) {
-                throw new Error(`Selected model (${modelId}) not found in available models.`);
-            }
-            modelType = selectedModelInfo.type || 'image'; // Get type, default to image
+            if (!selectedModelInfo) throw new Error(`Selected model (${modelId}) not found.`);
+            modelType = selectedModelInfo.type || 'image';
 
-            // --- Branch based on model type --- //
+            let apiUrl, requestData, numOutputs;
             if (modelType === 't2v') {
-                console.log(`Submitting T2V request for model: ${modelId}`);
                 apiUrl = API_T2V_GEN;
-                feedbackType = 'Video';
-                originalButtonHtml = '<span class="button-icon">🎬</span> Generate Video';
+                feedbackTypeText = 'Video';
                 requestData = {
-                    model_id: modelId,
-                    prompt: prompt,
-                    settings: {
-                        // Add T2V specific settings if needed from UI, using defaults for now
-                        fps: 16,        // Default FPS from API.md
-                        duration: 8,    // Default duration from API.md - Calculated from frames/fps backend?
-                        num_frames: parseInt(document.getElementById('num_frames')?.value || '17'), // Read from slider
-                        type: 't2v'     // Explicitly mark type for backend
-                    }
+                    model_id: modelId, prompt: prompt,
+                    settings: { fps: 16, num_frames: parseInt(document.getElementById('num_frames')?.value || '17'), type: 't2v' }
                 };
-                numOutputs = 1; // T2V usually produces one output
-            } else { // Assume 'image'
-                console.log(`Submitting T2I request for model: ${modelId}`);
+                numOutputs = 1;
+            } else {
                 apiUrl = API_IMAGE_GEN;
-                feedbackType = 'Image';
-                originalButtonHtml = '<span class="button-icon">⚡</span> Generate Image';
+                feedbackTypeText = 'Image';
                 requestData = {
-                    model_id: modelId,
-                    prompt: prompt,
-                negative_prompt: formData.get('negative_prompt') || undefined,
+                    model_id: modelId, prompt: prompt, negative_prompt: formData.get('negative_prompt') || undefined,
                 settings: {
                         num_images: parseInt(formData.get('num_images') || '1'),
                         num_inference_steps: parseInt(formData.get('steps') || '30'),
                         guidance_scale: parseFloat(formData.get('guidance') || '7.5'),
                         height: parseInt(formData.get('height') || '1024'),
                         width: parseInt(formData.get('width') || '1024'),
-                        type: 'image' // Explicitly mark type for backend
+                        type: 'image'
                     }
                 };
                 numOutputs = requestData.settings.num_images;
             }
-            // --- End Branch --- //
-
-            // Show submitting feedback
-            submitButton.innerHTML = `<span class="button-icon spin">⏳</span> Submitting ${feedbackType}...`;
+            submitButton.innerHTML = `<span class="button-icon spin">⏳</span> Submitting ${feedbackTypeText}...`;
 
             const response = await fetch(apiUrl, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(requestData)
+                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(requestData)
             });
-
             const data = await response.json();
+
             if (response.ok && data.job_id) {
                 feedbackSection.style.display = 'block';
                 feedbackSection.classList.add('active');
-                if (statusText) statusText.textContent = `Preparing ${feedbackType} generation...`;
+                if (statusText) statusText.textContent = `Preparing ${feedbackTypeText} generation...`;
                 if (timerContainer) timerContainer.style.display = 'flex';
-                timer.reset();
-                timer.start();
-
-                await pollGenerationStatus(data.job_id, feedbackSection, numOutputs, timer, feedbackType);
-                // Reload after generation completes
-                window.location.reload();
+                timer.reset(); timer.start();
+                await pollGenerationStatus(data.job_id, feedbackSection, numOutputs, timer, feedbackTypeText);
+                if (data.job_id) {
+                    submittedJobIdsFromIndexPage.push(data.job_id);
+                    if (!indexPageJobPollingInterval) {
+                        indexPageJobPollingInterval = setInterval(pollSubmittedIndexPageJobs, 10000);
+                    }
+                }
             } else {
-                showMainFeedback(`Error: ${data.message || `Failed to start ${feedbackType} job`}`, 'error');
+                if(typeof showMainFeedback === 'function') showMainFeedback(`Error: ${data.message || `Failed to start ${feedbackTypeText} job`}`, 'error');
                 timer.stop();
             }
         } catch (error) {
-            console.error(`Error submitting ${feedbackType} generation request:`, error);
-            showMainFeedback(`Error: ${error.message}`, 'error');
+            console.error(`Error submitting ${feedbackTypeText} generation request:`, error);
+            if(typeof showMainFeedback === 'function') showMainFeedback(`Error: ${error.message}`, 'error');
             timer.stop();
         } finally {
+             // Restore button text based on model type, needs handleModelChange to be callable or similar logic here
+            const finalModelId = document.getElementById('model')?.value;
+            const finalSelectedModel = availableModels[finalModelId];
+            const finalIsT2V = finalSelectedModel && finalSelectedModel.type === 't2v';
+            submitButton.innerHTML = finalIsT2V ? '<span class="button-icon">🎬</span> Generate Video' : '<span class="button-icon">⚡</span> Generate Image';
             submitButton.disabled = false;
-            // Reset button text based on the model type that was submitted
-            submitButton.innerHTML = originalButtonHtml;
         }
     });
-
-    // Handle prompt enrichment
-    const enrichButton = document.getElementById('enrich-prompt');
-    if (enrichButton) {
-        enrichButton.addEventListener('click', handlePromptEnrichment);
-    }
 }
 
-// Infinite scroll implementation
-function initializeInfiniteScroll() {
-    let page = 1;
-    let loading = false;
-    const gallery = document.querySelector('.gallery-grid');
-
-    if (!gallery) return;
-
-    // Determine if we're on the gallery page or index page
-    const isGalleryPage = window.location.pathname.includes('/gallery');
-
-    // Only add sentinel and infinite scroll functionality on gallery page
-    if (isGalleryPage) {
-        // Add a sentinel element for better infinite scroll detection
-        const sentinel = document.createElement('div');
-        sentinel.id = 'infinite-scroll-sentinel';
-        sentinel.style.width = '100%';
-        sentinel.style.height = '10px';
-        sentinel.style.margin = '30px 0';
-        gallery.parentNode.appendChild(sentinel);
-
-        const loadMoreImages = async () => {
-            if (loading) return;
-
-            loading = true;
-            try {
-                const response = await fetch(`/gallery?page=${page}`, {
-                    headers: {
-                        'Accept': 'application/json',
-                        'X-Requested-With': 'XMLHttpRequest'
-                    }
-                });
-
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
-                }
-
-                const data = await response.json();
-                if (data.images && data.images.length > 0) {
-                    appendImagesToGallery(data.images);
-                    page++;
-                }
-            } catch (error) {
-                console.error('Error loading more images:', error);
-            } finally {
-                loading = false;
-            }
-        };
-
-        // Use Intersection Observer instead of scroll event
-        const observer = new IntersectionObserver((entries) => {
-            if (entries[0].isIntersecting && !loading) {
-                loadMoreImages();
-            }
-        }, {
-            rootMargin: '200px',
-        });
-
-        observer.observe(sentinel);
-    }
-    // We're not adding any scroll-blocking code for the index page
-    // This ensures normal scrolling behavior is maintained
-}
-
-// Update generation status
-function updateGenerationStatus(message, progress) {
-    const feedbackSection = document.querySelector('.generation-feedback');
-    if (!feedbackSection) {
-        console.error('Feedback section not found');
-        return;
-    }
-
-    const statusText = feedbackSection.querySelector('.status-text');
-    const progressFill = feedbackSection.querySelector('.progress-fill');
-    const timerContainer = feedbackSection.querySelector('.generation-timer');
-
-    // Show feedback section and ensure it's visible
-    feedbackSection.style.display = 'block';
-    feedbackSection.style.visibility = 'visible';
-    feedbackSection.classList.add('active');
-
-    // Show and update status text
-    if (statusText) {
-        statusText.style.display = 'block';
-        statusText.style.visibility = 'visible';
-        statusText.textContent = message;
-        console.log('Updated status text:', statusText.textContent);
-    } else {
-        console.error('Status text element not found');
-    }
-
-    // Show timer
-    if (timerContainer) {
-        timerContainer.style.display = 'flex';
-        timerContainer.style.visibility = 'visible';
-    } else {
-        console.error('Timer container not found');
-    }
-
-    // Update progress bar
-    if (progressFill) {
-        progressFill.style.width = `${progress}%`;
-        progressFill.style.visibility = 'visible';
-
-        // Only show animation when actually generating
-        if (progress > 0 && progress < 100) {
-            progressFill.classList.add('active');
-        } else {
-            progressFill.classList.remove('active');
-        }
-    } else {
-        console.error('Progress fill element not found');
-    }
-
-    // Log status update for debugging
-    console.log('Status updated:', { message, progress, elements: {
-        feedbackVisible: feedbackSection.style.display,
-        statusTextVisible: statusText?.style.display,
-        timerVisible: timerContainer?.style.display,
-        progressWidth: progressFill?.style.width
-    }});
-}
-
-// Status polling with enhanced feedback (MODIFIED to accept feedbackType)
-async function pollGenerationStatus(jobId, feedbackSection, totalImages = 1, timer, feedbackType = 'Image') {
-    const statusText = feedbackSection.querySelector('.status-text');
-    const progressFill = feedbackSection.querySelector('.progress-fill');
-    const queuePosition = feedbackSection.querySelector('.queue-position');
-    const estimatedTime = feedbackSection.querySelector('.estimated-time');
-
-    let startTime = Date.now();
-    let lastQueuePosition = null;
-    let estimatedTimePerJob = 30000 * totalImages; // Initial estimate: 30 seconds per image
-    let currentProgress = 0;
-    let targetProgress = 0;
-    let stageStartTime = null;
-    let currentStage = 'waiting';
-    let lastStatusMessage = '';
-    let stuckCounter = 0; // To detect when we're stuck
-    let generationSteps = 0; // Track the progression in steps
-    let forcedTransition = false; // Track if we've forced a transition
-
-    // Function to smoothly animate progress
-    const animateProgress = () => {
-        if (currentProgress < targetProgress) {
-            currentProgress = Math.min(currentProgress + 1, targetProgress);
-            if (progressFill) {
-                progressFill.style.width = `${currentProgress}%`;
-            }
-            if (currentProgress < targetProgress) {
-                requestAnimationFrame(animateProgress);
-            }
-        }
-    };
-
-    // Function to update progress smoothly
-    const updateProgress = (target) => {
-        targetProgress = target;
-        requestAnimationFrame(animateProgress);
-    };
-
-    console.log(`Starting generation polling for job ${jobId} with ${totalImages} image(s) requested`);
-
-    while (true) {
-        try {
-            const [statusResponse, queueResponse] = await Promise.all([
-                fetch(API.STATUS(jobId)),
-                fetch(API.QUEUE)
-            ]);
-
-            if (!statusResponse.ok || !queueResponse.ok) {
-                throw new Error('Failed to fetch status or queue information');
-            }
-
-            const statusData = await statusResponse.json();
-            const queueData = await queueResponse.json();
-
-            // Calculate queue position considering total images, not just job count
-            // This will account for multi-image jobs in the queue calculation
-            let estimatedTotalImages = 0;
-            if (queueData.pending_jobs) {
-                // If backend provides pending_jobs details with image counts
-                estimatedTotalImages = queueData.pending_jobs.reduce((total, job) => total + (job.num_images || 1), 0);
-            } else {
-                // Fallback: estimate based on pending count and average image per job
-                const avgImagesPerJob = queueData.avg_images_per_job || 1;
-                estimatedTotalImages = queueData.pending * avgImagesPerJob;
-            }
-
-            // Account for own job if it's still pending
-            if (statusData.status === 'pending') {
-                estimatedTotalImages += totalImages;
-            }
-
-            const currentPosition = Math.max(0, estimatedTotalImages);
-
-            // Update queue position display
-            if (queuePosition) {
-                if (currentPosition > 0) {
-                    queuePosition.textContent = `Queue Position: ${currentPosition} ${totalImages > 1 ? `(${totalImages} images)` : 'image'}`;
-                    queuePosition.style.display = 'block';
-                    queuePosition.style.visibility = 'visible';
-                } else {
-                    queuePosition.style.display = 'none';
-                }
-            }
-
-            // Update estimated time with more accuracy
-            if (estimatedTime) {
-                if (currentPosition > 0) {
-                    const estimatedMinutes = Math.ceil((currentPosition * estimatedTimePerJob) / 60000);
-                    const timeText = estimatedMinutes === 1 ? '1 minute' :
-                                  estimatedMinutes < 1 ? 'less than a minute' :
-                                  `${estimatedMinutes} minutes`;
-                    estimatedTime.textContent = `Estimated wait: ${timeText}`;
-                    estimatedTime.style.display = 'block';
-                    estimatedTime.style.visibility = 'visible';
-                } else {
-                    estimatedTime.style.display = 'none';
-                }
-            }
-
-            // Check if we're receiving the same message multiple times
-            // and force progression if we appear to be stuck
-            const isNewMessage = lastStatusMessage !== JSON.stringify(statusData);
-            if (!isNewMessage) {
-                stuckCounter++;
-                console.log(`Same status received ${stuckCounter} times in a row`);
-            } else {
-                stuckCounter = 0;
-                lastStatusMessage = JSON.stringify(statusData);
-
-                // Check if the backend message indicates generation but we're still in loading stage
-                const messageContent = statusData.message || '';
-                if (currentStage === 'loading_model' &&
-                    (messageContent.includes('Generating') ||
-                     (statusData.progress && statusData.progress.generating))) {
-                    console.log('Backend indicates generation but UI shows loading - updating stage');
-                    currentStage = 'generating';
-                    stageStartTime = Date.now();
-                    forcedTransition = true;
-                }
-            }
-
-            // Force progression if we've received the same message too many times
-            const forceProgressUpdate = stuckCounter > 5;
-
-            if (forceProgressUpdate && (currentStage === 'processing' || currentStage === 'loading_model')) {
-                console.log('Forcing progress update due to stuck status');
-                // Force stage advancement if we're stuck
-                if (currentStage === 'loading_model') {
-                    currentStage = 'generating';
-                    stageStartTime = Date.now();
-                    forcedTransition = true;
-                    console.log('Forced transition from loading_model to generating stage');
-                } else if (currentStage === 'generating' && generationSteps === 0) {
-                    generationSteps = Math.floor(totalImages > 1 ? totalImages * 5 : 10);
-                }
-            }
-
-            // Update status based on job status with detailed progress
-            switch (statusData.status) {
-                case 'completed':
-                    timer.stop();
-                    updateGenerationStatus(`${feedbackType} generation completed!`, 100);
-                    updateProgress(100);
-                    await new Promise(resolve => setTimeout(resolve, 1000));
-                    feedbackSection.style.display = 'none';
-                    return true;
-
-                case 'failed':
-                    timer.stop();
-                    const errorMsg = statusData.message || 'Unknown error';
-                    updateGenerationStatus(`Generation failed: ${errorMsg}`, 0);
-                    updateProgress(0);
-                    return false;
-
-                case 'processing':
-                    let progress = 50; // Base progress for processing
-                    let message = 'Generating your image...';
-
-                    // Track the current stage for better progress updates
-                    if (currentStage === 'waiting' || currentStage === 'pending') {
-                        currentStage = 'processing';
-                        stageStartTime = Date.now();
-                    }
-
-                    // If we have detailed progress info
-                    if (statusData.progress) {
-                        // Get the step information if available
-                        const stepInfo = statusData.progress.step;
-                        const totalSteps = statusData.progress.total_steps;
-
-                        // Check message content for status clues
-                        const messageContent = statusData.message || '';
-                        let isGenerating = messageContent.includes('Generating') ||
-                                           messageContent.includes('Step') ||
-                                           statusData.progress.generating ||
-                                           statusData.progress.step !== null;
-                        let isLoading = messageContent.includes('Loading model') ||
-                                         statusData.progress.loading_model;
-                        let isSaving = messageContent.includes('Saving') ||
-                                        statusData.progress.saving;
-
-                        // If we've forced a transition to generating, don't go back to loading
-                        if (forcedTransition && currentStage === 'generating') {
-                            // Override the loading status if we've forced a transition
-                            if (isLoading && !isGenerating) {
-                                console.log('Ignoring loading status due to forced transition');
-                                isLoading = false;
-                                // Simulate generating status
-                                message = 'Generating your image...';
-                                progress = 35 + (Math.min(100, (Date.now() - stageStartTime) / 20000) * 50);
-                                updateGenerationStatus(message, progress);
-                                updateProgress(progress);
-                                break;
-                            }
-                        }
-
-                        if (isLoading && !forcedTransition) {
-                            if (currentStage !== 'loading_model') {
-                                currentStage = 'loading_model';
-                                stageStartTime = Date.now();
-                                console.log('Entered loading_model stage');
-                            }
-
-                            // Calculate progress within the loading model stage
-                            // Start at 25%, move to 35% over time
-                            const loadingDuration = Date.now() - stageStartTime;
-                            const maxLoadingDuration = 5000; // Assume loading takes max 5 seconds
-                            const loadingProgressPercent = Math.min(100, (loadingDuration / maxLoadingDuration) * 100);
-                            progress = 25 + (loadingProgressPercent / 10); // Scale to 25-35% range
-                            message = 'Loading AI model...';
-
-                            // Remove automatic transition based on time
-                        } else if (isGenerating) {
-                            // Also check message content as a fallback
-                            if (currentStage !== 'generating') {
-                                currentStage = 'generating';
-                                stageStartTime = Date.now();
-                                generationSteps = stepInfo;
-                                console.log('Entered generating stage');
-                            }
-
-                            // If we have step information
-                            if (stepInfo !== null && totalSteps !== null) {
-                                generationSteps = stepInfo;
-                                // Calculate progress as percentage of steps
-                                const stepProgress = (stepInfo / totalSteps) * 100;
-
-                                // Map the step progress to a range between 35-85%
-                                progress = 35 + (stepProgress * 0.5); // Scale to 35-85% range
-                                message = `Generating image... Step ${stepInfo}/${totalSteps}`;
-
-                                // Update multi-image display
-                                if (totalImages > 1) {
-                                    // Roughly estimate which image we're generating
-                                    const estimatedImageNum = Math.ceil(statusData.message?.match(/image (\d+) of \d+/)?.[1]) || 1;
-                                    message = `Generating image ${estimatedImageNum} of ${totalImages}... Step ${stepInfo}/${totalSteps}`;
-                                }
-                            } else {
-                                // No step info - estimate progress based on time
-                                const generatingDuration = Date.now() - stageStartTime;
-                                const estimatedFullDuration = 20000; // Assume generation takes ~20 seconds
-                                const estimatedProgress = Math.min(100, (generatingDuration / estimatedFullDuration) * 100);
-                                progress = 35 + (estimatedProgress * 0.5); // Scale to 35-85% range
-
-                                // For multiple images, acknowledge that
-                                if (totalImages > 1) {
-                                    // Try to parse image number from status message
-                                    const imgMatch = statusData.message?.match(/image (\d+) of \d+/);
-                                    const estimatedImageNum = imgMatch ? parseInt(imgMatch[1]) :
-                                        Math.min(totalImages, Math.floor((estimatedProgress / 100) * totalImages) + 1);
-                                    message = `Generating image ${estimatedImageNum} of ${totalImages}...`;
-                                } else if (feedbackType === 'Video') {
-                                    message = 'Generating Video...'
-                                }
-                            }
-
-                            // If the server provides a specific message, use that
-                            if (statusData.message && statusData.message.includes('Generating image')) {
-                                // Extract step info from message if present
-                                const stepMatch = statusData.message.match(/Step (\d+)\/(\d+)/);
-                                if (stepMatch) {
-                                    const step = parseInt(stepMatch[1]);
-                                    const total = parseInt(stepMatch[2]);
-                                    if (!isNaN(step) && !isNaN(total)) {
-                                        generationSteps = step;
-                                        // Calculate progress percentage from steps
-                                        const stepProgress = (step / total) * 100;
-                                        progress = 35 + (stepProgress * 0.5); // Scale to 35-85% range
-                                    }
-                                }
-                                message = statusData.message;
-                            }
-                        } else if (isSaving) {
-                            if (currentStage !== 'saving') {
-                                currentStage = 'saving';
-                                stageStartTime = Date.now();
-                                console.log('Entered saving stage');
-                            }
-                            progress = 85;
-                            message = `Saving generated ${feedbackType}...`;
-                        }
-                    } else {
-                        // No detailed progress info - use a time-based approach
-                        const processingTime = Date.now() - startTime;
-                        const estimatedTotalTime = estimatedTimePerJob;
-
-                        // Check message content for status clues even without progress info
-                        const messageContent = statusData.message || '';
-                        let isGenerating = messageContent.includes('Generating') ||
-                                          messageContent.includes('Step');
-                        let isLoading = messageContent.includes('Loading model');
-                        let isSaving = messageContent.includes('Saving');
-
-                        // If we've forced a transition to generating, don't go back to loading
-                        if (forcedTransition && currentStage === 'generating') {
-                            if (isLoading && !isGenerating) {
-                                console.log('Ignoring loading status due to forced transition (fallback)');
-                                isLoading = false;
-                                isGenerating = true; // Force generating status
-                            }
-                        }
-
-                        // Estimate overall progress
-                        const processingProgress = Math.min(90, (processingTime / estimatedTotalTime) * 100);
-                        progress = 35 + (processingProgress * 0.5); // Scale to 35-85% range
-
-                        // Determine message based on progress and message content
-                        if (isLoading) {
-                            message = 'Loading AI model...';
-                            progress = Math.min(progress, 35); // Cap at 35% for loading
-                        } else if (isGenerating) {
-                            message = `Generating ${feedbackType}...`;
-                            if (currentStage !== 'generating') {
-                                currentStage = 'generating';
-                                stageStartTime = Date.now();
-                            }
-                        } else if (isSaving) {
-                            message = `Saving ${feedbackType}...`;
-                            progress = Math.max(progress, 85); // At least 85% for saving
-                        } else if (progress < 40) {
-                            message = 'Preparing model...';
-                        } else if (progress < 70) {
-                            message = `Generating ${feedbackType}...`;
-                        } else {
-                            message = `Finalizing ${feedbackType}...`;
-                        }
-                    }
-
-                    updateGenerationStatus(message, progress);
-                    updateProgress(progress);
-
-                    // Debug log to help track status changes
-                    console.log(`Status update from backend: "${statusData.message}", progress info:`, statusData.progress);
-                    console.log(`Current UI state: stage=${currentStage}, message="${message}", progress=${progress}, forced=${forcedTransition}`);
-                    break;
-
-                case 'pending':
-                    if (currentStage !== 'pending') {
-                        currentStage = 'pending';
-                        stageStartTime = Date.now();
-                        console.log('Entered pending stage');
-                    }
-
-                    // Calculate progress based on queue position - make it more responsive
-                    const maxQueueProgress = 25; // Max progress while in queue
-                    let queueProgress;
-
-                    if (currentPosition > 10) {
-                        queueProgress = 5; // Just started, long queue
-                    } else if (currentPosition > 5) {
-                        queueProgress = 10; // Moving up
-                    } else if (currentPosition > 0) {
-                        queueProgress = 15 + (5 - currentPosition) * 2; // Almost there
-                    } else {
-                        queueProgress = maxQueueProgress; // Next in line
-                    }
-
-                    updateGenerationStatus('Waiting in queue...', queueProgress);
-                    updateProgress(queueProgress);
-                    break;
-
-                default:
-                    updateGenerationStatus('Unexpected status: ' + statusData.status, currentProgress);
-                    break;
-            }
-
-            // Update time estimates based on queue movement
-            if (lastQueuePosition !== null && lastQueuePosition > currentPosition) {
-                const timeElapsed = Date.now() - startTime;
-                const jobsCompleted = lastQueuePosition - currentPosition;
-                if (jobsCompleted > 0) {
-                    const newEstimate = timeElapsed / jobsCompleted;
-                    // Use weighted average to smooth out estimate changes
-                    estimatedTimePerJob = (estimatedTimePerJob * 0.7) + (newEstimate * 0.3);
-                    console.log(`Updated time estimate: ${estimatedTimePerJob/1000}s per job`);
-                }
-            }
-            lastQueuePosition = currentPosition;
-
-            // Wait before next poll
-            await new Promise(resolve => setTimeout(resolve, 1000));
-        } catch (error) {
-            console.error('Error polling status:', error);
-            // Don't fail immediately on network errors, retry a few times
-            await new Promise(resolve => setTimeout(resolve, 2000));
-            updateGenerationStatus('Checking status...', currentProgress);
-        }
-    }
-}
-
-// Initialize queue status polling
 function initializeQueueStatusPolling() {
     const updateQueueStatus = async () => {
         try {
             const response = await fetch(API.QUEUE);
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
+            if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
             const data = await response.json();
-
-            // Update any global queue status indicators
-            const { pending, processing, completed, failed, queue_size } = data;
-
-            // Update UI elements if they exist
-            const queueStatus = document.querySelector('.queue-status');
-            if (queueStatus) {
+            const { pending, processing } = data;
+            const queueStatusEl = document.querySelector('.queue-status'); // In nav, from HTML structure
+            if (queueStatusEl) {
                 if (pending > 0 || processing > 0) {
-                    queueStatus.textContent = `Queue: ${pending} waiting, ${processing} processing`;
-                    queueStatus.style.display = 'block';
+                    queueStatusEl.textContent = `Queue: ${pending} waiting, ${processing} processing`;
+                    queueStatusEl.style.display = 'block'; // Or 'flex' depending on CSS
                 } else {
-                    queueStatus.style.display = 'none';
+                    queueStatusEl.style.display = 'none';
                 }
             }
         } catch (error) {
             console.error('Error updating queue status:', error);
-            // Don't show any error to the user, just hide queue elements
-            const queueElements = document.querySelectorAll('.queue-status, .queue-position, .estimated-time');
-            queueElements.forEach(el => {
-                if (el) el.style.display = 'none';
-            });
+            const queueStatusEl = document.querySelector('.queue-status');
+            if (queueStatusEl) queueStatusEl.style.display = 'none';
         }
     };
-
-    // Update every 5 seconds
     setInterval(updateQueueStatus, 5000);
-    updateQueueStatus(); // Initial update
+    updateQueueStatus();
 }
 
-// Utility functions
-function formatDate(date) {
-    return new Intl.DateTimeFormat('default', {
-        month: 'short',
-        day: 'numeric',
-        hour: 'numeric',
-        minute: 'numeric',
-        hour12: true
-    }).format(date);
-}
-
-function formatDateLong(date) {
-    return new Intl.DateTimeFormat('default', {
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric',
-        hour: 'numeric',
-        minute: 'numeric',
-        second: 'numeric',
-        timeZoneName: 'short'
-    }).format(date);
-}
-
-// Image details display
-async function showImageDetails(imageId) {
+async function showImageDetails(imageId) { // This seems like an older modal, might be deprecated or for admin use.
     try {
         const response = await fetch(API.METADATA(imageId));
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
         const data = await response.json();
-
-        const modal = document.querySelector('.modal');
-        const content = document.querySelector('.modal-content');
+        const modal = document.querySelector('.modal'); // Generic .modal
+        const content = modal?.querySelector('.modal-content');
+        if (!modal || !content) return;
 
         const generationTime = new Date(data.generation_time * 1000);
+        // Assuming formatDate and formatDateLong are available (e.g. from uiUtils.js)
+        const formattedDate = typeof formatDate === 'function' ? formatDate(generationTime) : generationTime.toLocaleTimeString();
+        const formattedDateLong = typeof formatDateLong === 'function' ? formatDateLong(generationTime) : generationTime.toLocaleString();
 
         content.innerHTML = `
             <span class="close-modal">&times;</span>
             <img src="${API.IMAGE(imageId)}" alt="Generated Image" style="max-width: 100%; margin-bottom: 20px;">
             <div class="image-details">
-                <p><strong>Generated:</strong> <span title="${formatDateLong(generationTime)}">${formatDate(generationTime)}</span></p>
+                <p><strong>Generated:</strong> <span title="${formattedDateLong}">${formattedDate}</span></p>
                 <p><strong>Model:</strong> ${data.model_id}</p>
                 <p><strong>Prompt:</strong> ${data.prompt}</p>
                 <p><strong>Settings:</strong></p>
                 <pre>${JSON.stringify(data.settings, null, 2)}</pre>
             </div>
         `;
-
         modal.classList.add('visible');
-
-        // Preload next image if available
-        const nextItem = document.querySelector(`[data-image-id="${imageId}"]`).nextElementSibling;
-        if (nextItem) {
-            const nextId = nextItem.dataset.imageId;
-            new Image().src = API.IMAGE(nextId);
-        }
     } catch (error) {
         console.error('Error fetching image details:', error);
     }
 }
 
-// Gallery image appending
-function appendImagesToGallery(items) {
-    const gallery = document.querySelector('.gallery-grid');
-    if (!gallery) return; // Ensure gallery exists
-
-    items.forEach(item => {
-        const div = document.createElement('div');
-        div.className = 'gallery-item';
-
-        // Add both attributes for compatibility and type info
-        div.dataset.mediaId = item.id; // New attribute name
-        div.dataset.imageId = item.id; // Legacy attribute name
-
-        const createdAt = new Date(item.created_at);
-        const prompt = item.prompt || item.settings?.prompt || 'No prompt available';
-        // Ensure model_id is correctly extracted from metadata if available
-        const modelId = item.model_id || item.metadata?.model_id || item.settings?.model_id || 'Unknown';
-
-        // --- Determine Media Type based on Model ---
-        let isVideoType = false;
-        let mediaType = 'image'; // Default to image
-        if (modelId !== 'Unknown' && availableModels[modelId]) {
-            const modelType = availableModels[modelId].type;
-            if (modelType === 't2v' || modelType === 'i2v') {
-                isVideoType = true;
-                mediaType = 'video';
-            }
-        } else {
-            // Fallback check if model info isn't in availableModels (e.g., older items)
-            // Use existing logic as a backup
-            if (item.settings?.type === 'video' || isVideo(item.id)) {
-                 isVideoType = true;
-                 mediaType = 'video';
-            }
-            console.warn(`Model ID ${modelId} not found in availableModels for item ${item.id}. Falling back to settings/ID check.`);
-        }
-        div.dataset.mediaType = mediaType; // Set the media type dataset
-        // --- End Media Type Determination ---
-
-        const mediaUrl = isVideoType ? `/api/get_video/${item.id}` : API.IMAGE(item.id);
-
-        let previewHtml;
-        if (isVideoType) {
-            previewHtml = `<video src="${mediaUrl}" controls muted loop preload="metadata" class="video-preview"></video>`;
-        } else {
-            previewHtml = `<img src="${mediaUrl}" alt="${prompt.slice(0, 50)}..." loading="lazy">`;
-        }
-
-        div.innerHTML = `
-            <div class="item-preview">
-                ${previewHtml}
-                <div class="quick-actions">
-                    <button class="action-copy-prompt" title="Copy Prompt" data-prompt="${prompt}">📋</button>
-                    ${!isVideoType ? `<button class="action-generate-video" title="Generate Video from Image" data-image-id="${item.id}" data-image-prompt="${prompt}">🎥</button>` : ''}
-                    <button class="action-download" title="Download ${isVideoType ? 'Video' : 'Image'}">⬇️</button>
-                    <button class="action-delete" title="Delete ${isVideoType ? 'Video' : 'Image'}">🗑️</button>
-                </div>
-            </div>
-            <div class="item-details">
-                <p class="prompt">${prompt.slice(0, 100)}...</p>
-                <p class="model">${modelId}</p>
-                <p class="date" title="${formatDateLong(createdAt)}">${formatDate(createdAt)}</p>
-            </div>
-        `;
-
-        // Add event listeners for quick actions (using delegation now, but individual listeners can be added here if needed)
-
-        gallery.appendChild(div);
-    });
-}
-
-// Utility functions
-function addNeonFlash(element) {
-    element.style.boxShadow = 'var(--neon-green-glow)';
-    setTimeout(() => {
-        element.style.boxShadow = '';
-    }, 1000);
-}
-
-// Handle prompt enrichment
 async function handlePromptEnrichment(e) {
     e.preventDefault();
     const promptInput = document.getElementById('prompt-input');
     const styleSelect = document.getElementById('enrich-style');
     const currentPrompt = promptInput.value.trim();
     const selectedStyle = styleSelect.value;
-
     if (!currentPrompt) {
-        addNeonFlash(promptInput);
+        if(typeof addNeonFlash === 'function') addNeonFlash(promptInput); // from uiUtils
         return;
     }
-
     const enrichButton = e.target.closest('#enrich-prompt');
     enrichButton.disabled = true;
     enrichButton.innerHTML = '<span class="button-icon spin">⏳</span> Enriching...';
-
-    // Save original prompt for comparison
     const originalPrompt = currentPrompt;
-
     try {
         const response = await fetch('/api/enrich', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                prompt: currentPrompt,
-                style: selectedStyle
-            })
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ prompt: currentPrompt, style: selectedStyle })
         });
-
         const data = await response.json();
         if (data.enriched_prompt) {
-            // Update textarea with enriched prompt
             promptInput.value = data.enriched_prompt;
-            addNeonFlash(promptInput);
-
-            // Show comparison with original prompt
+            if(typeof addNeonFlash === 'function') addNeonFlash(promptInput);
             showPromptComparison(originalPrompt, data.enriched_prompt);
         }
     } catch (error) {
@@ -1576,686 +561,581 @@ async function handlePromptEnrichment(e) {
     }
 }
 
-// Show comparison between original and enriched prompt
 function showPromptComparison(original, enriched) {
     const comparisonDiv = document.getElementById('prompt-comparison');
     const originalPromptDiv = document.getElementById('original-prompt');
     const restoreButton = document.getElementById('restore-original');
     const closeButton = document.getElementById('close-comparison');
     const promptInput = document.getElementById('prompt-input');
-
     if (!comparisonDiv || !originalPromptDiv) return;
-
-    // Display original prompt
     originalPromptDiv.textContent = original;
     comparisonDiv.style.display = 'block';
-
-    // Handle restore button
     if (restoreButton) {
         restoreButton.onclick = () => {
             promptInput.value = original;
-            addNeonFlash(promptInput);
+            if(typeof addNeonFlash === 'function') addNeonFlash(promptInput);
         };
     }
-
-    // Handle close button
-    if (closeButton) {
-        closeButton.onclick = () => {
-            comparisonDiv.style.display = 'none';
-        };
-    }
+    if (closeButton) closeButton.onclick = () => { comparisonDiv.style.display = 'none'; };
 }
 
-// Initialize enhanced tooltip functionality
 function initializeEnrichInfo() {
     const infoIcon = document.getElementById('enrich-info');
     const tooltip = document.querySelector('.enrich-tooltip');
-
     if (!infoIcon || !tooltip) return;
-
-    // Show tooltip on click (more mobile-friendly)
     infoIcon.addEventListener('click', (e) => {
         e.stopPropagation();
-
-        const isVisible = tooltip.style.display === 'block';
-        tooltip.style.display = isVisible ? 'none' : 'block';
+        tooltip.style.display = tooltip.style.display === 'block' ? 'none' : 'block';
     });
-
-    // Hide tooltip when clicking elsewhere
-    document.addEventListener('click', () => {
-        tooltip.style.display = 'none';
-    });
+    document.addEventListener('click', () => { tooltip.style.display = 'none'; });
 }
 
-// Initialize all enhanced prompt UI features
 function initializeEnhancedPromptUI() {
     initializeEnrichInfo();
+    const enrichButton = document.getElementById('enrich-prompt');
+    if (enrichButton) enrichButton.addEventListener('click', handlePromptEnrichment);
 }
 
-// Initialize queue status indicator
 function initializeQueueStatusIndicator() {
     const statusIcon = document.getElementById('generation-status-icon');
     const statusText = document.getElementById('queue-status-text');
     const queueIndicator = statusIcon?.closest('.queue-indicator');
-
     if (!statusIcon || !statusText || !queueIndicator) return;
 
-    // Initial update
-    updateQueueStatusIndicator();
+    function formatTime(seconds) { // Inner helper, or move to uiUtils
+        if (seconds < 60) return `${Math.round(seconds)} sec`;
+        if (seconds < 3600) return `${Math.round(seconds / 60)} min`;
+        const hours = Math.floor(seconds / 3600);
+        const minutes = Math.round((seconds % 3600) / 60);
+        return `${hours}h ${minutes}m`;
+    }
 
-    // Update every 5 seconds
-    setInterval(updateQueueStatusIndicator, 5000);
-
-    // Add click handler to show detailed stats
-    queueIndicator.addEventListener('click', showQueueDetails);
-
-    function showQueueDetails() {
+    function showQueueDetailsPopup() {
         fetch('/api/queue?detailed=true')
             .then(response => response.json())
             .then(data => {
-                const { pending, processing, completed, failed, total,
-                        avg_processing_time_seconds, failure_rate, models } = data;
-
-                // Create or get the details popup
                 let detailsPopup = document.getElementById('queue-details-popup');
                 if (!detailsPopup) {
                     detailsPopup = document.createElement('div');
                     detailsPopup.id = 'queue-details-popup';
-                    detailsPopup.className = 'queue-details-popup';
+                    detailsPopup.className = 'queue-details-popup'; // Add CSS for this
                     document.body.appendChild(detailsPopup);
-
-                    // Add close button
                     const closeBtn = document.createElement('button');
-                    closeBtn.className = 'close-popup';
-                    closeBtn.innerHTML = '×';
-                    closeBtn.addEventListener('click', (e) => {
-                        e.stopPropagation();
-                        detailsPopup.classList.remove('visible');
-                    });
+                    closeBtn.className = 'close-popup'; closeBtn.innerHTML = '×';
+                    closeBtn.addEventListener('click', (e) => { e.stopPropagation(); detailsPopup.classList.remove('visible'); });
                     detailsPopup.appendChild(closeBtn);
                 }
-
-                // Position the popup near the indicator
                 const rect = queueIndicator.getBoundingClientRect();
                 detailsPopup.style.top = `${rect.bottom + window.scrollY + 10}px`;
                 detailsPopup.style.left = `${rect.left + window.scrollX}px`;
 
-                // Create content for the popup
-                let content = `
-                    <h3>Queue Status</h3>
-                    <div class="queue-stats">
-                        <div class="stat-item">
-                            <span class="stat-label"><i class="fas fa-hourglass-half"></i> Pending</span>
-                            <span class="stat-value ${pending > 0 ? 'highlight' : ''}">${pending}</span>
-                        </div>
-                        <div class="stat-item">
-                            <span class="stat-label"><i class="fas fa-cog fa-spin"></i> Processing</span>
-                            <span class="stat-value ${processing > 0 ? 'highlight' : ''}">${processing}</span>
-                        </div>
-                        <div class="stat-item">
-                            <span class="stat-label"><i class="fas fa-check-circle"></i> Completed</span>
-                            <span class="stat-value">${completed}</span>
-                        </div>
-                        <div class="stat-item">
-                            <span class="stat-label"><i class="fas fa-exclamation-triangle"></i> Failed</span>
-                            <span class="stat-value ${failed > 0 ? 'error' : ''}">${failed}</span>
-                        </div>
-                        <div class="stat-item total">
-                            <span class="stat-label"><i class="fas fa-chart-bar"></i> Total Jobs</span>
-                            <span class="stat-value highlight">${total}</span>
-                        </div>
-                    </div>`;
+                let content = `<h3>Queue Status</h3><div class="queue-stats">
+                    <div class="stat-item"><span class="stat-label"><i class="fas fa-hourglass-half"></i> Pending</span><span class="stat-value ${data.pending > 0 ? 'highlight' : ''}">${data.pending}</span></div>
+                    <div class="stat-item"><span class="stat-label"><i class="fas fa-cog fa-spin"></i> Processing</span><span class="stat-value ${data.processing > 0 ? 'highlight' : ''}">${data.processing}</span></div>
+                    <div class="stat-item"><span class="stat-label"><i class="fas fa-check-circle"></i> Completed</span><span class="stat-value">${data.completed}</span></div>
+                    <div class="stat-item"><span class="stat-label"><i class="fas fa-exclamation-triangle"></i> Failed</span><span class="stat-value ${data.failed > 0 ? 'error' : ''}">${data.failed}</span></div>
+                    <div class="stat-item total"><span class="stat-label"><i class="fas fa-chart-bar"></i> Total Jobs</span><span class="stat-value highlight">${data.total}</span></div></div>`;
 
-                // Add performance metrics if available
-                if (avg_processing_time_seconds !== undefined) {
-                    const avgTimeFormatted = formatTime(avg_processing_time_seconds);
-                    content += `
-                        <h3>Performance</h3>
-                        <div class="queue-stats">
-                            <div class="stat-item">
-                                <span class="stat-label"><i class="fas fa-clock"></i> Avg. Processing Time</span>
-                                <span class="stat-value">${avgTimeFormatted}</span>
-                            </div>
-                            <div class="stat-item">
-                                <span class="stat-label"><i class="fas fa-exclamation-circle"></i> Failure Rate</span>
-                                <span class="stat-value ${failure_rate > 10 ? 'error' : ''}">${failure_rate}%</span>
-                            </div>
-                        </div>`;
+                if (data.avg_processing_time_seconds !== undefined) {
+                    content += `<h3>Performance</h3><div class="queue-stats">
+                        <div class="stat-item"><span class="stat-label"><i class="fas fa-clock"></i> Avg. Time</span><span class="stat-value">${formatTime(data.avg_processing_time_seconds)}</span></div>
+                        <div class="stat-item"><span class="stat-label"><i class="fas fa-exclamation-circle"></i> Failure Rate</span><span class="stat-value ${data.failure_rate > 10 ? 'error' : ''}">${data.failure_rate}%</span></div></div>`;
                 }
-
-                // Add model-specific stats if available
-                if (models && Object.keys(models).length > 0) {
+                if (data.models && Object.keys(data.models).length > 0) {
                     content += `<h3>Models (24h)</h3><div class="queue-stats">`;
-
-                    Object.entries(models).forEach(([modelId, stats]) => {
-                        const successRate = stats.completed > 0 ?
-                            Math.round((stats.completed / (stats.completed + stats.failed)) * 100) : 0;
-
-                        content += `
-                            <div class="stat-item model-stat">
-                                <span class="stat-label"><i class="fas fa-robot"></i> ${modelId}</span>
-                                <span class="stat-value">
-                                    <span class="model-count">${stats.total} jobs</span>
-                                    <span class="model-success-rate ${successRate > 90 ? 'highlight' : successRate < 70 ? 'error' : ''}">
-                                        ${successRate}% success
-                                    </span>
-                                </span>
-                            </div>`;
+                    Object.entries(data.models).forEach(([modelId, stats]) => {
+                        const successRate = stats.completed > 0 ? Math.round((stats.completed / (stats.completed + stats.failed)) * 100) : 0;
+                        content += `<div class="stat-item model-stat"><span class="stat-label"><i class="fas fa-robot"></i> ${modelId}</span><span class="stat-value"><span class="model-count">${stats.total} jobs</span> <span class="model-success-rate ${successRate > 90 ? 'highlight' : successRate < 70 ? 'error' : ''}">${successRate}% success</span></span></div>`;
                     });
-
                     content += `</div>`;
                 }
-
-                // Set the content and show the popup
                 detailsPopup.innerHTML = content;
-                detailsPopup.appendChild(closeBtn);
+                const closeBtn = detailsPopup.querySelector('.close-popup') || document.createElement('button'); // Re-add if innerHTML overwrote
+                if (!detailsPopup.querySelector('.close-popup')) {
+                     closeBtn.className = 'close-popup'; closeBtn.innerHTML = '×';
+                     closeBtn.addEventListener('click', (e) => { e.stopPropagation(); detailsPopup.classList.remove('visible'); });
+                     detailsPopup.prepend(closeBtn); // Prepend to keep at top
+                }
                 detailsPopup.classList.add('visible');
-
-                // Close popup when clicking outside
-                document.addEventListener('click', function closePopup(e) {
+                document.addEventListener('click', function closePopupOnClickOutside(e) {
                     if (!detailsPopup.contains(e.target) && e.target !== queueIndicator) {
                         detailsPopup.classList.remove('visible');
-                        document.removeEventListener('click', closePopup);
+                        document.removeEventListener('click', closePopupOnClickOutside);
                     }
                 });
-            })
-            .catch(error => {
-                console.error('Error fetching queue details:', error);
-            });
+            }).catch(error => console.error('Error fetching queue details:', error));
     }
 
-    function updateQueueStatusIndicator() {
-        const statusIcon = document.getElementById('generation-status-icon');
-        const statusText = document.getElementById('queue-status-text');
-        const queueIndicator = statusIcon?.closest('.queue-indicator');
-
-        if (!statusIcon || !statusText || !queueIndicator) return;
-
+    function updateIndicatorUI() {
         fetch('/api/queue')
             .then(response => response.json())
             .then(data => {
                 const { pending, processing, completed, failed } = data;
                 const totalActive = pending + processing;
-
-                // Create tooltip with detailed stats
-                const tooltipText = `
-                    📊 Queue Status:
-                    • ${pending} pending
-                    • ${processing} processing
-                    • ${completed} completed
-                    • ${failed} failed
-
-                    🖱️ Click for detailed statistics
-                `;
+                const tooltipText = `📊 Queue: ${pending} pending, ${processing} processing, ${completed} completed, ${failed} failed. Click for details.`;
                 queueIndicator.setAttribute('title', tooltipText);
-
-                // Update status text and icon based on queue state
                 if (totalActive > 0) {
                     statusText.textContent = `Queue: ${totalActive}`;
-                    statusIcon.className = 'fas fa-cog fa-spin';
-                    statusIcon.style.color = '#39ff14'; // Neon green
+                    statusIcon.className = 'fas fa-cog fa-spin'; statusIcon.style.color = 'var(--neon-green)';
                 } else {
                     statusText.textContent = 'Queue: 0';
-                    statusIcon.className = 'fas fa-check-circle';
-                    statusIcon.style.color = '#39ff14'; // Neon green
+                    statusIcon.className = 'fas fa-check-circle'; statusIcon.style.color = 'var(--neon-green)';
                 }
-
-                // Show the indicator
                 queueIndicator.style.display = 'flex';
-            })
-            .catch(error => {
-                console.error('Error fetching queue status:', error);
+            }).catch(error => {
+                console.error('Error fetching queue status for indicator:', error);
                 statusText.textContent = 'Queue: ?';
-                statusIcon.className = 'fas fa-exclamation-triangle';
-                statusIcon.style.color = '#ff4444'; // Red
+                statusIcon.className = 'fas fa-exclamation-triangle'; statusIcon.style.color = '#ff4444';
                 queueIndicator.setAttribute('title', 'Could not fetch queue status');
                 queueIndicator.style.display = 'flex';
             });
     }
+    updateIndicatorUI();
+    setInterval(updateIndicatorUI, 5000);
+    queueIndicator.addEventListener('click', showQueueDetailsPopup);
 }
 
-// Helper function to format time in seconds to a readable format
-function formatTime(seconds) {
-    if (seconds < 60) {
-        return `${Math.round(seconds)} sec`;
-    } else if (seconds < 3600) {
-        return `${Math.round(seconds / 60)} min`;
-    } else {
-        const hours = Math.floor(seconds / 3600);
-        const minutes = Math.round((seconds % 3600) / 60);
-        return `${hours}h ${minutes}m`;
-    }
-}
-
-// Initialize Keep Prompt checkbox functionality
 function initializeKeepPromptCheckbox() {
     const checkbox = document.getElementById('keep_prompt');
     const promptInput = document.getElementById('prompt-input');
-
     if (!checkbox || !promptInput) return;
-
-    // Load saved state
     const savedKeep = localStorage.getItem('keepPromptChecked');
     const savedPrompt = localStorage.getItem('keptPrompt');
-
     if (savedKeep === 'true') {
         checkbox.checked = true;
-        if (savedPrompt !== null && promptInput.value.trim() === '') {
-            promptInput.value = savedPrompt;
+        if (savedPrompt !== null && promptInput.value.trim() === '') promptInput.value = savedPrompt;
         }
-    }
-
-    // Save checkbox state changes
     checkbox.addEventListener('change', () => {
         localStorage.setItem('keepPromptChecked', checkbox.checked);
-        if (!checkbox.checked) {
-            // If user unchecks, also clear saved prompt
-            localStorage.removeItem('keptPrompt');
-        }
+        if (!checkbox.checked) localStorage.removeItem('keptPrompt');
     });
 }
 
-// --- ADDED: Event Delegation for Gallery Item Actions ---
 function initializeGalleryItemActions() {
-    const galleryGrid = document.querySelector('.gallery-grid');
+    const galleryGrid = document.querySelector('.gallery-grid'); // This could be any gallery grid on the page
     if (!galleryGrid) return;
 
     galleryGrid.addEventListener('click', async (e) => {
         const galleryItem = e.target.closest('.gallery-item');
         if (!galleryItem) return;
-
         const mediaId = galleryItem.dataset.mediaId;
         const mediaType = galleryItem.dataset.mediaType || 'image';
 
-        // Handle Copy Prompt
-        if (e.target.classList.contains('action-copy-prompt')) {
-            const button = e.target;
+        if (e.target.closest('.action-copy-prompt')) { //delegated from initializeRecentGenerationsActionListeners
+            const button = e.target.closest('.action-copy-prompt');
             const promptText = button.dataset.prompt;
+            let copied = false;
+
             if (promptText) {
+                // Try modern clipboard API first
+                if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
                 try {
                     await navigator.clipboard.writeText(promptText);
-                    const originalText = button.textContent;
-                    button.textContent = 'Copied!';
-                    button.disabled = true;
-                    setTimeout(() => {
-                        button.textContent = originalText;
-                        button.disabled = false;
-                    }, 1500);
+                        copied = true;
                 } catch (err) {
-                    console.error('Failed to copy prompt:', err);
-                    // Optionally show feedback to user
+                        console.warn('navigator.clipboard.writeText failed (galleryItemActions):', err);
+                    }
+                }
+
+                // Fallback to document.execCommand('copy')
+                if (!copied) {
+                    const textArea = document.createElement("textarea");
+                    textArea.value = promptText;
+                    textArea.style.position = "fixed"; textArea.style.top = "0"; textArea.style.left = "0";
+                    textArea.style.width = "2em"; textArea.style.height = "2em";
+                    textArea.style.padding = "0"; textArea.style.border = "none";
+                    textArea.style.outline = "none"; textArea.style.boxShadow = "none";
+                    textArea.style.background = "transparent";
+                    document.body.appendChild(textArea);
+                    textArea.focus();
+                    textArea.select();
+                    try {
+                        document.execCommand('copy');
+                        copied = true;
+                    } catch (err) {
+                        console.warn('document.execCommand(\'copy\') failed (galleryItemActions):', err);
+                    } finally {
+                        document.body.removeChild(textArea);
+                    }
+                }
+
+                const originalText = button.textContent; // Assuming button only contains text or simple icon
+                if (copied) {
+                    button.textContent = 'Copied!'; button.disabled = true;
+                    setTimeout(() => { button.textContent = originalText; button.disabled = false; }, 1500);
+                    if(typeof showMainFeedback === 'function') showMainFeedback('Prompt copied!', 'success', 1500);
+                } else {
+                    console.error('All copy methods failed for gallery item.');
+                    if(typeof showMainFeedback === 'function') showMainFeedback('Could not copy prompt. Please try manually.', 'error');
+                    // No direct text selection fallback here as it's a small button, not a text area.
+                    // The error message should guide the user.
+                    button.textContent = 'Fail'; // Keep it short
+                    button.disabled = true;
+                    setTimeout(() => { button.textContent = originalText; button.disabled = false; }, 2000);
                 }
             }
         }
-
-        // Handle Download
-        else if (e.target.classList.contains('action-download')) {
+        else if (e.target.closest('.action-download')) {
             if (!mediaId) return;
-            const button = e.target;
-            const downloadUrl = mediaType === 'video' ? `/api/get_video/${mediaId}` : `/api/get_image/${mediaId}`;
+            const button = e.target.closest('.action-download');
+            const downloadUrl = mediaType === 'video' ? API.IMAGE(mediaId).replace("/get_image/", "/get_video/") : API.IMAGE(mediaId);
             const filename = `cyberimage-${mediaId}.${mediaType === 'video' ? 'mp4' : 'png'}`;
-            const originalText = button.textContent; // Store original icon/text if needed
-
+            const originalText = button.innerHTML;
              try {
-                button.innerHTML = '⏳'; // Simple loading indicator
-                button.disabled = true;
-
+                button.innerHTML = '⏳'; button.disabled = true;
                 const response = await fetch(downloadUrl);
-                 if (!response.ok) {
-                     throw new Error(`Failed to fetch media: ${response.statusText}`);
-                 }
+                if (!response.ok) throw new Error(`Failed to fetch media: ${response.statusText}`);
                 const blob = await response.blob();
                 const url = window.URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = filename;
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
+                const a = document.createElement('a'); a.href = url; a.download = filename;
+                document.body.appendChild(a); a.click(); document.body.removeChild(a);
                 window.URL.revokeObjectURL(url);
-
-                 setTimeout(() => {
-                    button.innerHTML = originalText; // Restore icon
-                    button.disabled = false;
-                 }, 500);
-
+                setTimeout(() => { button.innerHTML = originalText; button.disabled = false; }, 500);
             } catch (error) {
-                console.error('Download failed:', error);
-                button.innerHTML = '❌'; // Error indicator
-                 setTimeout(() => {
-                    button.innerHTML = originalText; // Restore icon
-                    button.disabled = false;
-                 }, 2000);
+                console.error('Download failed (galleryItemActions):', error);
+                button.innerHTML = '❌';
+                setTimeout(() => { button.innerHTML = originalText; button.disabled = false; }, 2000);
             }
         }
-
-        // Handle Delete
-        else if (e.target.classList.contains('action-delete')) {
+        else if (e.target.closest('.action-delete')) {
             if (!mediaId) return;
-            // Confirm deletion (reuse or create a confirmation modal)
+             // Use ModalManager.confirmDelete if available and appropriate
+             // This is more for a generic gallery page; recent-generations uses its own listeners
+             // which call ModalManager.confirmDelete.
+             if (typeof ModalManager !== 'undefined' && ModalManager.confirmDelete) {
+                ModalManager.confirmDelete(mediaId, mediaType, galleryItem);
+             } else {
+                // Fallback to simple confirm if ModalManager isn't fully set up or for a different context
             const confirmed = confirm(`Are you sure you want to delete this ${mediaType}? This cannot be undone.`);
             if (confirmed) {
                 try {
-                    // ALWAYS use the /api/image endpoint for deletion, regardless of mediaType
-                    const deleteUrl = `/api/image/${mediaId}`;
-                    const response = await fetch(deleteUrl, { method: 'DELETE' });
+                        const response = await fetch(API.IMAGE(mediaId), { method: 'DELETE' });
                     if (response.ok) {
-                        galleryItem.style.transition = 'opacity 0.5s ease, transform 0.5s ease';
-                        galleryItem.style.opacity = '0';
-                        galleryItem.style.transform = 'scale(0.9)';
-                        setTimeout(() => galleryItem.remove(), 500);
-                        // Optionally update counts or show feedback
+                            galleryItem.remove();
+                            if(typeof showMainFeedback === 'function') showMainFeedback('Deleted successfully.', 'success');
                     } else {
-                        console.error('Failed to delete:', response.statusText);
-                         alert(`Failed to delete ${mediaType}. Server responded: ${response.statusText}`);
-                        // Show error feedback
+                             if(typeof showMainFeedback === 'function') showMainFeedback(`Failed to delete ${mediaType}.`, 'error');
+                        }
+                    } catch (err) {
+                        if(typeof showMainFeedback === 'function') showMainFeedback(`Error deleting ${mediaType}.`, 'error');
                     }
-                } catch (error) {
-                    console.error('Error deleting:', error);
-                     alert(`An error occurred while trying to delete the ${mediaType}.`);
-                    // Show error feedback
                 }
-            }
+             }
         }
-
-        // Handle Generate Video (if applicable)
-        else if (e.target.classList.contains('action-generate-video') && mediaType === 'image') {
+        else if (e.target.closest('.action-generate-video') && mediaType === 'image') {
              if (!mediaId) return;
-             const button = e.target;
+            const button = e.target.closest('.action-generate-video');
              const sourceImageUrl = galleryItem.querySelector('img')?.src;
-             const sourcePrompt = button.dataset.imagePrompt; // Get prompt from data attribute
-
-             if (sourceImageUrl && sourcePrompt !== undefined) {
-                 openVideoGenModal(mediaId, sourceImageUrl, sourcePrompt);
+            const sourcePrompt = button.dataset.imagePrompt;
+            if (sourceImageUrl && sourcePrompt !== undefined && typeof ModalManager !== 'undefined' && ModalManager.openVideoGenerator) {
+                ModalManager.openVideoGenerator(mediaId, sourceImageUrl, sourcePrompt);
              } else {
-                console.error("Missing image URL or prompt for video generation.", {mediaId, sourceImageUrl, sourcePrompt});
-                alert("Could not retrieve necessary information to generate video from this image.");
+                console.error("Missing data or ModalManager.openVideoGenerator for video generation.");
+                if(typeof showMainFeedback === 'function') showMainFeedback("Cannot generate video. Info missing.", "error");
              }
         }
     });
 }
-// --- END ADDED ---
 
-// --- DEPRECATED? Remove or refactor initializeCopyPromptButtons if replaced by delegation ---
-// function initializeCopyPromptButtons() { ... } // Keep if used elsewhere, otherwise remove
+async function pollGenerationStatus(jobId, feedbackSection, numOutputs, timer, feedbackType) {
+    const progressBar = feedbackSection?.querySelector('.progress-fill');
+    const statusTextEl = feedbackSection?.querySelector('.status-text');
+    const queuePositionEl = feedbackSection?.querySelector('.queue-position');
+    const estimatedTimeEl = feedbackSection?.querySelector('.estimated-time');
+    const POLLING_INTERVAL = 2000;
+    let pollCount = 0;
+    const MAX_POLLS_WITHOUT_PROGRESS = 30;
+    let pollsWithoutProgress = 0;
 
-// --- Video Generation Modal Logic ---
-function initializeVideoGenerationModal() {
-    const videoGenModal = document.getElementById('videoGenModal');
-    const videoGenForm = document.getElementById('video-generate-form');
-    const videoModelSelect = document.getElementById('videoGenModelSelect');
-    const sourceImageEl = document.getElementById('videoGenSourceImage');
-    const sourcePromptEl = document.getElementById('videoGenSourcePrompt');
-    const sourceImageIdInput = document.getElementById('videoGenSourceImageId');
-    const videoPromptInput = document.getElementById('videoGenPromptInput');
-
-    if (!videoGenModal || !videoGenForm || !videoModelSelect || !sourceImageEl || !sourcePromptEl || !sourceImageIdInput || !videoPromptInput) {
-        console.warn('Video Generation Modal elements not found. Video generation disabled.');
+    return new Promise((resolve, reject) => {
+        const intervalId = setInterval(async () => {
+            pollCount++;
+            try {
+                const response = await fetch(API.STATUS(jobId));
+                if (!response.ok) {
+                    if (response.status === 404 && pollCount > 5) throw new Error(`${feedbackType} job ${jobId} not found.`);
+                    console.warn(`Error fetching status for ${jobId} (Attempt ${pollCount}): ${response.status}`);
+                    pollsWithoutProgress++;
+                    if (pollsWithoutProgress > MAX_POLLS_WITHOUT_PROGRESS) throw new Error(`No progress for ${jobId} after ${MAX_POLLS_WITHOUT_PROGRESS} attempts.`);
         return;
     }
+                const data = await response.json();
+                pollsWithoutProgress = 0;
+                if (statusTextEl) statusTextEl.textContent = data.status_message || data.status || 'Processing...';
+                if (progressBar) progressBar.style.width = `${data.progress || 0}%`;
+                if (queuePositionEl) queuePositionEl.textContent = data.queue_position ? `Queue Pos: ${data.queue_position}` : '';
+                if (estimatedTimeEl) estimatedTimeEl.textContent = data.estimated_processing_time_seconds ? `Est: ${Math.round(data.estimated_processing_time_seconds)}s` : '';
 
-    // Add listener for the camera button clicks (using event delegation)
-    document.body.addEventListener('click', (event) => {
-        const button = event.target.closest('.action-generate-video');
-        if (button) {
-            const sourceImageId = button.dataset.imageId;
-            const sourcePrompt = button.dataset.imagePrompt;
-            const galleryItem = button.closest('.gallery-item');
-            const sourceImageElement = galleryItem ? galleryItem.querySelector('img') : null;
-            const sourceImageUrl = sourceImageElement ? sourceImageElement.src : '';
-
-            if (sourceImageId && sourcePrompt) {
-                openVideoGenModal(sourceImageId, sourceImageUrl, sourcePrompt);
-            } else {
-                console.error('Missing data on video generate button:', button);
+                if (data.status === 'completed') {
+                    clearInterval(intervalId); timer.stop();
+                    if (statusTextEl) statusTextEl.textContent = `${feedbackType} generation complete!`;
+                    if (progressBar) progressBar.style.width = '100%';
+                    resolve(data);
+                } else if (data.status === 'failed') {
+                    clearInterval(intervalId); timer.stop();
+                    const errorMessage = data.error_message || `${feedbackType} generation failed.`;
+                    if (statusTextEl) statusTextEl.textContent = errorMessage;
+                    reject(new Error(errorMessage));
+                } else if (!['processing', 'pending', 'queued'].includes(data.status)){
+                    console.warn(`Unknown status for job ${jobId}: ${data.status}`);
+                }
+            } catch (error) {
+                console.error(`Polling error for job ${jobId}:`, error);
+                pollsWithoutProgress++;
+                if (pollsWithoutProgress > MAX_POLLS_WITHOUT_PROGRESS || pollCount > MAX_POLLS_WITHOUT_PROGRESS * 2) {
+                    clearInterval(intervalId); timer.stop();
+                    if (statusTextEl) statusTextEl.textContent = `Error checking status.`;
+                    reject(error);
+                }
             }
-        }
+        }, POLLING_INTERVAL);
     });
+}
 
-    // Save selected model ID
-    videoModelSelect.addEventListener('change', () => {
-        localStorage.setItem('lastVideoModelId', videoModelSelect.value);
-    });
+function showIndexPendingReloadNotification(message) {
+    if (indexReloadNotificationTimer) clearTimeout(indexReloadNotificationTimer);
+    if(typeof showMainFeedback === 'function') showMainFeedback(message, 'info', 15000);
+}
 
-    // Handle I2V form submission
-    videoGenForm.addEventListener('submit', async (event) => {
-        event.preventDefault();
-        const submitButton = videoGenForm.querySelector('button[type="submit"]');
-        submitButton.disabled = true;
-        submitButton.innerHTML = '<span class="button-icon spin">⏳</span> Submitting...';
+async function checkQueueAndReloadIfIndexPending() {
+    const mainForm = document.getElementById('generation-form');
+    const promptInput = mainForm ? mainForm.querySelector('#prompt-input') : null;
+    const videoGenModal = document.getElementById('videoGenModal');
+    const isPromptActive = promptInput && (document.activeElement === promptInput || promptInput.value.trim() !== '');
+    const isModalActive = videoGenModal && videoGenModal.style.display === 'block';
+    console.log(`PollIndex: checkQueueAndReloadIfIndexPending - isPromptActive: ${isPromptActive}, isModalActive: ${isModalActive}, pendingIndexPageReload: ${pendingIndexPageReload}`);
 
-        const sourceId = document.getElementById('videoGenSourceImageId').value;
-        const videoPrompt = document.getElementById('videoGenPromptInput').value.trim();
-        const videoModelId = videoModelSelect.value;
+    if (!isPromptActive && !isModalActive && pendingIndexPageReload) {
+        console.log('PollIndex: checkQueueAndReloadIfIndexPending - Conditions met, refreshing!');
+        await refreshRecentGenerationsSection();
+        pendingIndexPageReload = false;
+        if (indexReloadNotificationTimer) clearTimeout(indexReloadNotificationTimer);
+    } else if (pendingIndexPageReload) {
+        console.log("PollIndex: checkQueueAndReloadIfIndexPending - Reload pending, but inputs still active or other condition not met.");
+    }
+}
 
-        if (!videoPrompt || !videoModelId) {
-            alert('Please enter a video prompt and select a model.');
-            submitButton.disabled = false;
-            submitButton.innerHTML = '<span class="button-icon">▶️</span> Generate Video';
-            return;
-        }
+async function pollSubmittedIndexPageJobs() {
+    if (submittedJobIdsFromIndexPage.length === 0) {
+        // console.log('PollIndex: No jobs to poll, clearing interval.');
+        clearInterval(indexPageJobPollingInterval); indexPageJobPollingInterval = null; return;
+    }
+    let newCompletions = false;
+    // console.log('PollIndex: Polling for jobs:', submittedJobIdsFromIndexPage);
+    const jobIdsToPoll = [...submittedJobIdsFromIndexPage]; // Create a copy to iterate over
 
+    for (const jobId of jobIdsToPoll) {
         try {
-            showMainFeedback('Submitting I2V request...', 'info');
-
-            const selectedModel = availableModels[videoModelId];
-            if (!selectedModel) {
-                throw new Error(`Model ${videoModelId} not found`);
+            const response = await fetch(API.STATUS(jobId));
+            if (!response.ok) {
+                if (response.status === 404) {
+                    // console.log(`PollIndex: Job ${jobId} not found (404), removing from tracking.`);
+                    submittedJobIdsFromIndexPage = submittedJobIdsFromIndexPage.filter(id => id !== jobId);
+                }
+                continue;
             }
-
-            if (selectedModel.type !== 'i2v' && !videoModelId.toLowerCase().includes('i2v')) {
-                throw new Error(`Model ${videoModelId} is not an image-to-video model`);
+            const data = await response.json();
+            // console.log(`PollIndex: Status for job ${jobId}:`, data.status);
+            if (data.status === 'completed' || data.status === 'failed') {
+                // console.log(`PollIndex: Job ${jobId} finished with status: ${data.status}. Removing from tracking.`);
+                submittedJobIdsFromIndexPage = submittedJobIdsFromIndexPage.filter(id => id !== jobId);
+                newCompletions = true;
             }
+        } catch (error) { console.error('PollIndex: Error polling job status for recent generations:', error); }
+    }
 
-            const videoGenModalElement = document.getElementById('videoGenModal');
-            const sourceWidth = videoGenModalElement.dataset.sourceWidth;
-            const sourceHeight = videoGenModalElement.dataset.sourceHeight;
+    if (newCompletions) {
+        console.log('PollIndex: New completions detected.');
+        const mainForm = document.getElementById('generation-form');
+        const promptInput = mainForm ? mainForm.querySelector('#prompt-input') : null;
+        const videoGenModal = document.getElementById('videoGenModal');
+        
+        const isPromptActive = promptInput && (document.activeElement === promptInput || promptInput.value.trim() !== '');
+        const isModalActive = videoGenModal && videoGenModal.style.display === 'block';
+        console.log(`PollIndex: Input states - isPromptActive: ${isPromptActive} (ActiveElem: ${document.activeElement === promptInput}, PromptText: '${promptInput ? promptInput.value.trim() : 'N/A'}'), isModalActive: ${isModalActive}`);
 
-            let apiPayload = {
-                source_image_id: sourceId,
-                video_prompt: videoPrompt,
-                video_model_id: videoModelId,
-                guidance_scale: 3.5 // Adjusted and top-level
-            };
-
-            if (sourceWidth && sourceHeight) {
-                apiPayload.width = parseInt(sourceWidth, 10);
-                apiPayload.height = parseInt(sourceHeight, 10);
+        if (isPromptActive || isModalActive) {
+            if (!pendingIndexPageReload) {
+                console.log('PollIndex: Inputs active, setting pendingIndexPageReload = true.');
+                pendingIndexPageReload = true;
+                showIndexPendingReloadNotification("New content ready! Finish typing or close modals to see updates.");
+            }
             } else {
-                console.warn("Video Gen: Source image dimensions not available. Backend will use defaults for width/height.");
-            }
+            console.log('PollIndex: Inputs NOT active. Calling refreshRecentGenerationsSection().');
+            await refreshRecentGenerationsSection();
+            pendingIndexPageReload = false;
+            if (indexReloadNotificationTimer) clearTimeout(indexReloadNotificationTimer);
+        }
+    }
 
-            console.log("Submitting I2V job with payload:", apiPayload);
+    if (submittedJobIdsFromIndexPage.length === 0) {
+        // console.log('PollIndex: All tracked jobs are done. Clearing interval.');
+        clearInterval(indexPageJobPollingInterval); indexPageJobPollingInterval = null;
+        if (pendingIndexPageReload) {
+            console.log('PollIndex: All jobs done, and a reload was pending. Checking inputs again.');
+            checkQueueAndReloadIfIndexPending();
+        }
+    }
+}
 
-            const response = await fetch(API_I2V_GEN, { // Use I2V endpoint
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(apiPayload) // Use the modified apiPayload
-            });
-            const result = await response.json();
-            if (response.ok && result.job_id) {
-                showMainFeedback(`I2V job ${result.job_id} submitted!`, 'success');
-                closeVideoGenModal();
+async function refreshRecentGenerationsSection() {
+    console.log('refreshRecentGenerationsSection: Called.'); // Log entry
+    const galleryGrid = document.querySelector('.recent-images .gallery-grid');
+    const loadingIndicator = document.querySelector('.recent-images .loading-indicator');
+    if (!galleryGrid) {
+        console.error("refreshRecentGenerationsSection: Could not find '.recent-images .gallery-grid'.");
+        return;
+    }
+    if (loadingIndicator) loadingIndicator.style.display = 'block';
+    try {
+        const itemsToFetch = parseInt(galleryGrid.dataset.itemsToShow) || 10;
+        console.log(`refreshRecentGenerationsSection: Fetching ${itemsToFetch} items.`); // Log itemsToFetch
+        const response = await fetch(`${API.BASE}/gallery?page=1&per_page=${itemsToFetch}`);
+        console.log(`refreshRecentGenerationsSection: Fetch response OK: ${response.ok}, Status: ${response.status}`); // Log response status
+        if (!response.ok) throw new Error(`Failed to fetch recent items: ${response.status}`);
+        const data = await response.json();
+        // Log only a summary of data to avoid overly verbose logs in case of many items.
+        console.log('refreshRecentGenerationsSection: Data received. Items length:', data.images ? data.images.length : 'undefined', 'Full data keys:', Object.keys(data));
+
+        if (data.images && data.images.length > 0) {
+            console.log(`refreshRecentGenerationsSection: Found ${data.images.length} items. Calling appendItemsToRecentGenerations.`);
+            appendItemsToRecentGenerations(data.images);
             } else {
-                throw new Error(result.message || 'Failed to submit I2V job');
+            console.log('refreshRecentGenerationsSection: No items found or data.images is empty/undefined. Displaying empty message.'); // Log empty case, reflect change in log
+            galleryGrid.innerHTML = '<p class="empty-gallery-message">No recent generations yet.</p>';
             }
         } catch (error) {
-            console.error('Error submitting I2V job:', error);
-            showMainFeedback(`Error: ${error.message}`, 'error');
+        console.error('Error refreshing recent generations:', error);
+        galleryGrid.innerHTML = '<p class="error-message">Could not load recent items.</p>';
         } finally {
-            submitButton.disabled = false;
-            submitButton.innerHTML = '<span class="button-icon">▶️</span> Generate Video';
+        if (loadingIndicator) loadingIndicator.style.display = 'none';
+    }
+}
+
+function appendItemsToRecentGenerations(items) {
+    const galleryGrid = document.querySelector('.recent-images .gallery-grid');
+    if (!galleryGrid) {
+        console.error("appendItemsToRecentGenerations: Could not find '.recent-images .gallery-grid'.");
+        return;
+    }
+    galleryGrid.innerHTML = ''; // Clear previous items
+
+    // Create a document fragment to batch DOM manipulations
+    const fragment = document.createDocumentFragment();
+
+    items.forEach(item => {
+        // console.log('appendItemsToRecentGenerations - Processing item:', item); // Kept for debugging if needed
+        const itemElement = document.createElement('div');
+        itemElement.classList.add('gallery-item');
+        itemElement.dataset.mediaId = item.id;
+
+        let determinedMediaType = 'image'; // Default to image
+
+        // Prioritize .mp4 extension check
+        if (item.file_path && typeof item.file_path === 'string' && item.file_path.toLowerCase().endsWith('.mp4')) {
+            determinedMediaType = 'video';
+            // console.log(`appendItemsToRecentGenerations: Media type set to video for ${item.id} based on .mp4 file_path.`);
+        } else if (item.metadata && item.metadata.type === 'video') {
+            determinedMediaType = 'video';
+        } else if (item.type === 'video') {
+            determinedMediaType = 'video';
+        }
+        // If none of the above, it remains 'image' by default
+        
+        itemElement.dataset.mediaType = determinedMediaType;
+
+        itemElement.dataset.fullPrompt = item.full_prompt || item.prompt || '';
+        itemElement.dataset.modelId = item.model_id || '';
+        if (item.settings) itemElement.dataset.settings = JSON.stringify(item.settings);
+
+        const itemThumbnailUrl = item.thumbnail_url || (determinedMediaType === 'video' ? `/api/get_video/${item.id}/thumbnail` : `/api/get_image/${item.id}?size=small`);
+        const itemPreviewUrl = item.preview_url || (determinedMediaType === 'video' ? `/api/get_video/${item.id}` : `/api/get_image/${item.id}?size=medium`);
+        
+        let previewHtml;
+        if (determinedMediaType === 'video') {
+            previewHtml = `
+                <video preload="metadata" muted loop poster="${itemThumbnailUrl}">
+                    <source src="${itemPreviewUrl}#t=0.1" type="video/mp4">
+                </video>
+                <div class="video-indicator"><span class="icon">▶️</span></div>`;
+    } else {
+            previewHtml = `<img src="${itemThumbnailUrl}" alt="${(item.prompt || 'Generated image').substring(0,50)}" loading="lazy">`;
+        }
+
+        const canGenerateVideo = availableModels && Object.values(availableModels).some(m => m.type === 'i2v');
+        let quickActionsHtml = `
+            <div class="quick-actions">
+                <button class="quick-action-btn action-view" title="View Fullscreen"><span class="icon">👁️</span></button>`;
+        if (determinedMediaType === 'image' && canGenerateVideo) {
+             quickActionsHtml += `<button class="quick-action-btn action-generate-video-from-recent" title="Generate Video"><span class="icon">🎬</span></button>`;
+        }
+        quickActionsHtml += `<button class="quick-action-btn action-delete-from-recent" title="Delete"><span class="icon">🗑️</span></button></div>`;
+
+        itemElement.innerHTML = `
+            <div class="item-preview">${previewHtml}</div>
+            <div class="item-info"><p class="item-prompt" title="${item.full_prompt || item.prompt || ''}">${(item.prompt || 'No prompt').substring(0,100)}</p></div>
+            ${quickActionsHtml}`;
+        fragment.appendChild(itemElement); // Append to fragment
+    });
+
+    galleryGrid.appendChild(fragment); // Append fragment to the DOM once
+
+    initializeVideoHoverPlayForGrid('.recent-images .gallery-grid');
+    initializeRecentGenerationsActionListeners();
+}
+
+function initializeRecentGenerationsActionListeners() {
+    const recentGalleryGrid = document.querySelector('.recent-images .gallery-grid');
+    if (!recentGalleryGrid) {
+        console.error("initializeRecentGenerationsActionListeners: Could not find '.recent-images .gallery-grid'.");
+        return;
+    }
+    recentGalleryGrid.addEventListener('click', function(event) {
+        const target = event.target;
+        const galleryItem = target.closest('.gallery-item');
+        if (!galleryItem) return;
+        const mediaId = galleryItem.dataset.mediaId;
+        const mediaType = galleryItem.dataset.mediaType;
+
+        if (target.closest('.action-view')) {
+            ModalManager.showFullscreen(galleryItem);
+        }
+        else if (target.closest('.action-generate-video-from-recent')) {
+            if (mediaType === 'image') {
+                const imageUrl = API.IMAGE(mediaId); // Use API const
+                const prompt = galleryItem.dataset.fullPrompt || '';
+                ModalManager.openVideoGenerator(mediaId, imageUrl, prompt);
+            }
+        }
+        else if (target.closest('.action-delete-from-recent')) {
+            ModalManager.confirmDelete(mediaId, mediaType, galleryItem);
+        }
+        // Click on preview itself (not buttons) to open fullscreen
+        else if (target.closest('.item-preview') && !target.closest('.quick-actions')) {
+             ModalManager.showFullscreen(galleryItem);
         }
     });
 }
 
-function openVideoGenModal(sourceImageId, sourceImageUrl, sourcePrompt) {
-    const videoGenModal = document.getElementById('videoGenModal');
-    const videoModelSelect = document.getElementById('videoGenModelSelect');
-    const sourceImageEl = document.getElementById('videoGenSourceImage');
-    const sourcePromptEl = document.getElementById('videoGenSourcePrompt');
-    const sourceImageIdInput = document.getElementById('videoGenSourceImageId');
-    const videoPromptInput = document.getElementById('videoGenPromptInput');
-
-    if (!videoGenModal || !videoModelSelect || !sourceImageEl || !sourcePromptEl || !sourceImageIdInput || !videoPromptInput) return;
-
-    // Populate fields
-    sourceImageIdInput.value = sourceImageId;
-    // Clear previous dimensions and set up onload for new image
-    delete videoGenModal.dataset.sourceWidth;
-    delete videoGenModal.dataset.sourceHeight;
-
-    sourceImageEl.onload = function() {
-        videoGenModal.dataset.sourceWidth = this.naturalWidth;
-        videoGenModal.dataset.sourceHeight = this.naturalHeight;
-        console.log(`Video Gen Modal: Source image loaded. Dimensions: ${this.naturalWidth}x${this.naturalHeight}`);
-    };
-    sourceImageEl.onerror = function() {
-        console.error("Video Gen Modal: Source image failed to load.");
-        // Ensure dimensions are not carried over if image fails
-        delete videoGenModal.dataset.sourceWidth;
-        delete videoGenModal.dataset.sourceHeight;
-        sourceImageEl.alt = "Failed to load image preview"; // Update alt text
-    };
-    sourceImageEl.src = sourceImageUrl || ''; // Set src after onload/onerror are defined
-    sourceImageEl.alt = "Source image preview"; // Reset alt text
-
-    // If image is already loaded (e.g., from cache), onload might not fire consistently.
-    // So, explicitly set dimensions if already complete and has valid dimensions.
-    if (sourceImageEl.complete && sourceImageEl.naturalWidth && sourceImageEl.naturalWidth > 0) {
-        // Check if onload has already run by checking dataset, to prevent issues if onload also fires
-        if (!videoGenModal.dataset.sourceWidth) { 
-            videoGenModal.dataset.sourceWidth = sourceImageEl.naturalWidth;
-            videoGenModal.dataset.sourceHeight = sourceImageEl.naturalHeight;
-            console.log(`Video Gen Modal: Source image was already complete. Dimensions: ${sourceImageEl.naturalWidth}x${sourceImageEl.naturalHeight}`);
-        }
-    }
-
-    sourcePromptEl.textContent = sourcePrompt;
-    videoPromptInput.value = sourcePrompt; // Pre-fill with source prompt for convenience
-
-    // Populate video model select - FILTER FOR I2V using global availableModels
-    videoModelSelect.innerHTML = '<option value="">Select I2V Model</option>';
-    let modelAdded = false;
-
-    // Log all available models to help debug
-    console.log("All models available when populating video model dropdown:", availableModels);
-
-    Object.entries(availableModels).forEach(([id, info]) => {
-        // Look for models with type exactly matching "i2v" or ID containing "i2v"
-        if (info.type === 'i2v' || id.toLowerCase().includes('i2v')) {
-            console.log("Found I2V model:", id, info);
-        const option = document.createElement('option');
-        option.value = id;
-            option.textContent = `${id} - ${info.description || 'Image to Video Model'}`;
-        videoModelSelect.appendChild(option);
-            modelAdded = true;
-        }
-    });
-
-    // Set selection based on localStorage or default
-    const lastVideoModelId = localStorage.getItem('lastVideoModelId');
-    if (lastVideoModelId && videoModelSelect.querySelector(`option[value="${lastVideoModelId}"]`)) {
-        videoModelSelect.value = lastVideoModelId;
-    } else if (modelAdded) {
-        videoModelSelect.selectedIndex = 1; // Select first available I2V model
-    } else {
-        videoModelSelect.innerHTML = '<option value="">No Image-to-Video models available</option>';
-        console.error("No I2V models found in availableModels:", availableModels);
-    }
-
-    // Show modal
-    videoGenModal.style.display = 'block';
-    videoPromptInput.focus();
-}
-
-function closeVideoGenModal() {
-    const videoGenModal = document.getElementById('videoGenModal');
-    if (videoGenModal) {
-        videoGenModal.style.display = 'none';
-    }
-}
-
-// --- End Video Generation Modal Logic ---
-
-// --- Simple Feedback Function for main.js ---
-function showMainFeedback(message, type = 'info') {
-    let feedbackDiv = document.getElementById('main-feedback-message');
-    if (!feedbackDiv) {
-        feedbackDiv = document.createElement('div');
-        feedbackDiv.id = 'main-feedback-message';
-        feedbackDiv.style.position = 'fixed';
-        feedbackDiv.style.bottom = '20px';
-        feedbackDiv.style.left = '50%';
-        feedbackDiv.style.transform = 'translateX(-50%)';
-        feedbackDiv.style.padding = '10px 20px';
-        feedbackDiv.style.borderRadius = 'var(--border-radius)';
-        feedbackDiv.style.zIndex = '3000';
-        feedbackDiv.style.opacity = '0';
-        feedbackDiv.style.transition = 'opacity 0.3s ease';
-        document.body.appendChild(feedbackDiv);
-    }
-
-    feedbackDiv.textContent = message;
-    if (type === 'success') {
-        feedbackDiv.style.backgroundColor = 'rgba(57, 255, 20, 0.8)'; // Neon green bg
-        feedbackDiv.style.color = 'black';
-        feedbackDiv.style.border = '1px solid var(--neon-green)';
-    } else if (type === 'error') {
-        feedbackDiv.style.backgroundColor = 'rgba(255, 68, 68, 0.8)'; // Red bg
-        feedbackDiv.style.color = 'white';
-        feedbackDiv.style.border = '1px solid #ff4444';
-    } else {
-        feedbackDiv.style.backgroundColor = 'rgba(30, 30, 30, 0.9)'; // Dark bg for info
-        feedbackDiv.style.color = 'white';
-        feedbackDiv.style.border = '1px solid var(--neon-green-dim)';
-    }
-
-    // Fade in
-    setTimeout(() => { feedbackDiv.style.opacity = '1'; }, 10);
-
-    // Clear previous timeout if exists
-    if (feedbackDiv.dataset.timeoutId) {
-        clearTimeout(parseInt(feedbackDiv.dataset.timeoutId));
-    }
-
-    // Set timeout to fade out
-    const timeoutId = setTimeout(() => {
-        feedbackDiv.style.opacity = '0';
-        // Optional: remove element after fade out
-        // setTimeout(() => { feedbackDiv.remove(); }, 300);
-    }, 3000); // Display for 3 seconds
-    feedbackDiv.dataset.timeoutId = timeoutId.toString();
-}
-// --- End Simple Feedback Function ---
-
-// Helper function to check if a media item is a video
-function isVideo(mediaId) {
-    return mediaId.startsWith('vid_') || mediaId.includes('_vid_');
-}
-
-// --- ADDED: Hover-to-play for gallery videos ---
-function initializeVideoHoverPlay() {
-    const galleryGrid = document.querySelector('.gallery-grid');
+function initializeVideoHoverPlayForGrid(gridSelector) {
+    const galleryGrid = document.querySelector(gridSelector);
     if (!galleryGrid) return;
-
-    galleryGrid.addEventListener('mouseover', (e) => {
-        const video = e.target.closest('.gallery-item[data-media-type="video"] video');
-        if (video && !video.hasAttribute('data-playing')) {
-            video.play().catch(error => {
-                // Ignore errors like the user not interacting first, etc.
-                // console.log("Video play interrupted or failed:", error);
-            });
-            video.setAttribute('data-playing', 'true'); // Mark as playing
+    galleryGrid.addEventListener('mouseover', function(event) {
+        const galleryItem = event.target.closest('.gallery-item');
+        if (galleryItem && galleryItem.dataset.mediaType === 'video') {
+            const video = galleryItem.querySelector('video');
+            if (video && video.paused) video.play().catch(e => {});
         }
     });
-
-    galleryGrid.addEventListener('mouseout', (e) => {
-        const video = e.target.closest('.gallery-item[data-media-type="video"] video');
-        if (video && video.hasAttribute('data-playing')) {
-            video.pause();
-            video.removeAttribute('data-playing'); // Unmark
+    galleryGrid.addEventListener('mouseout', function(event) {
+        const galleryItem = event.target.closest('.gallery-item');
+        if (galleryItem && galleryItem.dataset.mediaType === 'video') {
+            const video = galleryItem.querySelector('video');
+            if (video && !video.paused) video.pause();
         }
     });
 }
-// --- END ADDED ---
+
+// --- Removed confirmDeleteMedia (moved to ModalManager) ---
+// --- Removed initializeVideoGenerationModal, openVideoGenModal, closeVideoGenModal (moved to ModalManager) ---
+// --- Removed initializeModalHandling, initializeGalleryHandling, showFullscreenMedia, hideModal (moved/integrated into ModalManager) ---

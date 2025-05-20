@@ -21,6 +21,8 @@ import uuid
 from huggingface_hub import InferenceClient
 import base64 # Added
 from io import BytesIO # Added
+import fal_client # Added for Fal.ai provider
+import requests # For downloading video from Fal.ai URL
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -122,12 +124,8 @@ class ModelManager:
         else:
             logger.info("REPLICATE_API_KEY loaded successfully.")
 
-        # Load FAL_AI_API_KEY for fal-ai provider
-        self._fal_ai_api_key = current_app.config.get('FAL_AI_API_KEY')
-        if not self._fal_ai_api_key:
-            logger.warning("FAL_AI_API_KEY not found in config. Models using fal-ai provider will not be available.")
-        else:
-            logger.info("FAL_AI_API_KEY loaded successfully.")
+        # Note: Fal.ai client authenticates using FAL_KEY or FAL_KEY_ID/FAL_KEY_SECRET environment variables.
+        # Ensure these are set externally for Fal.ai models to function.
 
         # --- Add Cache Tracking State ---
         self._currently_loaded_model_key: Optional[str] = None
@@ -793,6 +791,7 @@ class ModelManager:
 
     def generate_image_from_text(self, model_key: str, prompt: str, **kwargs) -> Tuple[str, Dict]:
         """Generate an image from text using the specified model"""
+        model_config = None  # Initialize model_config
         try:
             # Enhanced logging
             model_info = AVAILABLE_MODELS.get(model_key, {})
@@ -871,7 +870,7 @@ class ModelManager:
             output_folder = current_app.config.get('IMAGES_FOLDER', 'app/static/images')
             Path(output_folder).mkdir(parents=True, exist_ok=True) # Ensure output folder exists
 
-            model_config = AVAILABLE_MODELS.get(model_key)
+            model_config = AVAILABLE_MODELS.get(model_key, {})
             if not model_config:
                 raise ModelGenerationError(f"Model configuration not found for key: {model_key}")
 
@@ -908,17 +907,10 @@ class ModelManager:
                         client = InferenceClient(provider=provider if provider else None, token=self._hf_token)
                         logger.debug(f"Instantiated InferenceClient for Hugging Face provider='{provider if provider else 'default'}' with HF_TOKEN.")
                     elif provider == "fal-ai":
-                        if not self._hf_token:
-                            raise ModelGenerationError("HF_TOKEN is missing. Cannot use fal-ai provider (authenticated via HF Token).")
-                        client = InferenceClient(provider="fal-ai", api_key=self._hf_token)
-                        logger.debug("Instantiated InferenceClient for fal-ai with HF_TOKEN.")
-                    else:
-                        # Fallback for other potential providers, assuming token-based for now
-                        # This part might need more specific handling if other key-based providers are added
-                        logger.warning(f"Provider '{provider}' specified. Attempting with HF_TOKEN. This provider might require its own API key configuration.")
-                        if not self._hf_token:
-                             raise ModelGenerationError(f"HF_TOKEN is missing, cannot attempt API call for provider '{provider}'.")
-                        client = InferenceClient(provider=provider, token=self._hf_token)
+                        logger.warning(f"Provider '{provider}' specified. Attempting with FAL_AI_API_KEY. This provider might require its own API key configuration.")
+                        if not self._fal_ai_api_key:
+                             raise ModelGenerationError(f"FAL_AI_API_KEY is missing, cannot attempt API call for provider '{provider}'.")
+                        client = InferenceClient(provider=provider, token=self._fal_ai_api_key)
 
                     api_params = {
                         "prompt": prompt,
@@ -1072,99 +1064,90 @@ class ModelManager:
         if not model_config:
             raise ModelLoadError(f"Model {model_key} not found in configuration.")
 
-        # All I2V is now assumed to be API based
-        if model_config.get("source") != "huggingface_api":
-            # This condition should ideally not be met if load_models ensures only API i2v are considered runnable
-            logger.error(f"Model {model_key} is configured for I2V but not as an API model. Local I2V is deprecated.")
-            raise ModelGenerationError(f"Local Image-to-Video for {model_key} is no longer supported. Configure as API model.")
-
         # API-based I2V generation logic (existing code)
+        source = model_config.get("source")
+        provider = model_config.get("step_config", {}).get("provider")
+
         try:
-            logger.info(f"🎬 Starting Image-to-Video generation (I2V) with API model: {model_key}")
-            # ... (existing API call logic, parameter extraction, client init, etc.)
-            # Ensure all necessary parameters are passed from kwargs and model_config.options
-            api_token_to_use = self._hf_token
-            api_token_env_var = model_config.get("options", {}).get("api_token_env_var")
-            if api_token_env_var:
-                custom_token = os.getenv(api_token_env_var)
-                if custom_token:
-                    api_token_to_use = custom_token
-                else:
-                    logger.warning(f"api_token_env_var '{api_token_env_var}' specified for model {model_key} but env var not set or empty.")
-        
-            # Get the provider from model_config options to be used in the check
-            current_provider_from_config = model_config.get("options", {}).get("provider")
+            # Only support Fal.ai provider for API video generation (source: fal_api)
+            if source == "fal_api":
+                logger.info(f"🎬 Starting Image-to-Video generation (I2V) with Fal.ai model: {model_key} using fal_client.subscribe")
+                # Fal.ai client authentication is handled via FAL_AI_API_KEY environment variable.
+                
+                hf_model_repo_id = model_config.get("repo") # e.g., "Lightricks/LTX-Video"
+                fal_function_id = model_config.get("step_config", {}).get("fal_function_id")
 
-            # ***** DEBUGGING LOGS START *****
-            logger.info(f"DEBUG I2V/T2V: For model_key='{model_key}', before 'API token not configured' check:")
-            logger.info(f"DEBUG I2V/T2V:   self._hf_token is: {'SET and VALID' if self._hf_token else 'NOT SET or EMPTY'}")
-            logger.info(f"DEBUG I2V/T2V:   model_config.get('options', {{}}).get('api_token_env_var') = '{model_config.get('options', {}).get('api_token_env_var')}'")
-            logger.info(f"DEBUG I2V/T2V:   api_token_to_use (resolved) is: {'SET and VALID' if api_token_to_use else 'NOT SET or EMPTY'}")
-            logger.info(f"DEBUG I2V/T2V:   Provider from model_config.options = '{current_provider_from_config}'")
-            logger.info(f"DEBUG I2V/T2V:   Condition (not api_token_to_use): {not api_token_to_use}")
-            logger.info(f"DEBUG I2V/T2V:   Condition (not current_provider_from_config == 'fal-ai'): {not current_provider_from_config == 'fal-ai'}")
-            # ***** DEBUGGING LOGS END *****
-
-            # This is the problematic check
-            if not api_token_to_use and not current_provider_from_config == "fal-ai":
-                logger.error(f"DEBUG I2V/T2V: Raising 'API token not configured' error. Both conditions TRUE. api_token_to_use:'{api_token_to_use}', provider:'{current_provider_from_config}'")
-                raise ModelGenerationError(f"An API token (HF_TOKEN or custom) is not configured for API model {model_key} and it's not a provider like 'fal-ai' that uses a separate key.")
-
-            # Fal.ai provider for I2V and T2V (using HF_TOKEN)
-            # This 'provider' variable is for the switch-case like logic below, distinct from current_provider_from_config used in the check above.
-            provider = model_config.get("options", {}).get("provider") 
-            hf_model_repo_id = model_config.get("repo")
-            if not hf_model_repo_id:
-                raise ModelGenerationError(f"API model ID (repo) not configured for {model_key}.")
-
-            client = None
-            if provider == "fal-ai":
-                if not self._hf_token:
-                    raise ModelGenerationError(f"HF_TOKEN not configured for model {model_key} using fal-ai provider (authenticated via HF Token).")
-                client = InferenceClient(provider="fal-ai", api_key=self._hf_token)
-                logger.info(f"Using fal-ai provider for I2V model {model_key} with HF_TOKEN.")
-            else:
-                token_to_use = self._hf_token 
-                token_source_log = "default HF_TOKEN"
-                if api_token_env_var:
-                    custom_token = os.getenv(api_token_env_var)
-                    if custom_token:
-                        token_to_use = custom_token
-                        token_source_log = f"token from {api_token_env_var}"
+                if not fal_function_id:
+                    if hf_model_repo_id == "Lightricks/LTX-Video":
+                        fal_function_id = "fal-ai/ltx-video-13b-dev/image-to-video" # Default from user example
+                        logger.warning(f"'fal_function_id' not in config for {model_key}, defaulting to '{fal_function_id}' based on LTX-Video example.")
                     else:
-                        logger.warning(f"Environment variable {api_token_env_var} for {model_key} not found, falling back to HF_TOKEN.")
-                if not token_to_use:
-                    raise ModelGenerationError(f"An API token ({token_source_log}) is not configured for API model {model_key}.")
-                client = InferenceClient(token=token_to_use)
-                logger.info(f"Using {token_source_log} for I2V model {model_key}.")
+                        raise ModelGenerationError(f"'fal_function_id' not configured for Fal.ai model {model_key} and no default available.")
+            
+                logger.info(f"Using Fal.ai function ID: {fal_function_id}")
 
-            logger.info(f"Attempting I2V with API model: {model_key}, provider: {provider or 'default HuggingFace'}")
+                try:
+                    logger.debug(f"Uploading source image {source_image_path} to Fal.ai.")
+                    uploaded_image = fal_client.upload_file(source_image_path)
+                    image_url = uploaded_image.url if hasattr(uploaded_image, "url") else uploaded_image  # fallback if just a string
+                    logger.debug(f"Image uploaded to: {image_url}")
 
-            pil_image = load_image(source_image_path) # Assuming load_image is defined and returns PIL Image
-            buffered = BytesIO()
-            pil_image.save(buffered, format="PNG")
-            img_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
-            img_data_url = f"data:image/png;base64,{img_base64}"
+                    api_arguments = {
+                        "prompt": video_prompt,
+                        "image_url": image_url,
+                    }
 
-            payload_input = {
-                "prompt": video_prompt,
-                "image_url": img_data_url,
-            }
-            if kwargs.get("negative_prompt"): payload_input["negative_prompt"] = kwargs["negative_prompt"]
-            if kwargs.get("num_frames") is not None: payload_input["num_frames"] = kwargs["num_frames"]
-            if kwargs.get("fps") is not None: payload_input["fps"] = kwargs["fps"]
-            if kwargs.get("motion_bucket_id") is not None: payload_input["motion_bucket_id"] = kwargs["motion_bucket_id"]
-            if kwargs.get("noise_aug_strength") is not None: payload_input["noise_aug_strength"] = kwargs["noise_aug_strength"]
-            if kwargs.get("seed") is not None: payload_input["seed"] = kwargs["seed"]
+                    # Add optional parameters from kwargs if they exist
+                    if kwargs.get("num_frames") is not None: api_arguments["num_frames"] = kwargs["num_frames"]
+                    if kwargs.get("motion_bucket_id") is not None: api_arguments["motion_bucket_id"] = kwargs["motion_bucket_id"]
+                    if kwargs.get("noise_aug_strength") is not None: api_arguments["noise_aug_strength"] = kwargs["noise_aug_strength"]
+                    if kwargs.get("seed") is not None: api_arguments["seed"] = kwargs["seed"]
+                    # Negative prompt might be 'negative_prompt' or handled differently
+                    if kwargs.get("negative_prompt"): api_arguments["negative_prompt"] = kwargs["negative_prompt"]
 
-            request_payload = {"input": payload_input}
+                    logger.debug(f"Calling fal_client.subscribe for {fal_function_id} with arguments: { {k: v for k, v in api_arguments.items() if k != 'image_url'} }") # Avoid logging full image URL if too long
+                    
+                    response_data = fal_client.subscribe(fal_function_id, arguments=api_arguments)
 
-            logger.debug(f"Sending POST request. Model: {hf_model_repo_id}, Payload: {request_payload}")
-            video_bytes = client.post(model=hf_model_repo_id, json=request_payload)
+                    if not response_data or not isinstance(response_data, dict) or "video" not in response_data or not isinstance(response_data["video"], dict) or "url" not in response_data["video"]:
+                        logger.error(f"Fal.ai response for {fal_function_id} did not contain expected video URL. Response: {response_data}")
+                        raise ModelGenerationError(f"Fal.ai did not return a valid video URL for {model_key}. Check Fal.ai logs.")
 
-            generation_time = time.time() - kwargs.get("start_time", time.time())
-            logger.info(f"✅ I2V (API) for {model_key} completed in {generation_time:.2f}s, output {len(video_bytes)} bytes.")
-            return video_bytes
+                    video_url = response_data["video"]["url"]
+                    logger.info(f"Video generated by Fal.ai, available at: {video_url}. Downloading...")
+
+                    video_download_response = requests.get(video_url, timeout=300) # 5 min timeout for download
+                    video_download_response.raise_for_status()
+                    video_bytes = video_download_response.content
+
+                    generation_time = time.time() - kwargs.get("start_time", time.time())
+                    logger.info(f"✅ I2V (Fal.ai via fal_client) for {model_key} completed in {generation_time:.2f}s, output {len(video_bytes)} bytes.")
+                    return video_bytes
+
+                except fal_client.auth.MissingCredentialsError as e:
+                    logger.error(f"Fal.ai Authentication Error for {model_key} ({fal_function_id}): {e}", exc_info=True)
+                    error_msg = f"Fal.ai authentication failed for {model_key}. Ensure FAL_KEY or FAL_KEY_ID/FAL_KEY_SECRET environment variables are set." # Provide user-friendly message
+                    raise ModelGenerationError(error_msg) from e
+                except fal_client.FalClientError as e:
+                    logger.error(f"Fal.ai Server Exception for {model_key} ({fal_function_id}): {e.body}", exc_info=True)
+                    # Check if the exception has a body with a message (common for API errors)
+                    if hasattr(e, 'body') and isinstance(e.body, dict) and 'message' in e.body:
+                        error_msg = f"Fal.ai server error for {model_key}: {e.body['message']}"
+                    else:
+                        error_msg = f"Fal.ai client error for {model_key}: {str(e)}"
+                    raise ModelGenerationError(error_msg) from e
+                except requests.exceptions.RequestException as e:
+                    logger.error(f"Error downloading video from Fal.ai for {model_key}: {e}", exc_info=True)
+                    raise ModelGenerationError(f"Failed to download video from Fal.ai for {model_key}: {e}") from e
+                except Exception as e:
+                    logger.error(f"Error during I2V Fal.ai (fal_client) generation for {model_key}: {e}", exc_info=True)
+                    error_msg = f"Failed to generate I2V video with {model_key} via Fal.ai (fal_client): {e}"
+                    raise ModelGenerationError(error_msg) from e
+
+            else:
+                # This will be raised for any API model not configured with source: fal_api
+                raise ModelGenerationError(f"Unsupported API source for I2V: {source or 'None'}")
+
         except Exception as e:
             logger.error(f"Error during I2V API generation for {model_key}: {e}", exc_info=True)
             error_msg = f"Failed to generate I2V video with {model_key}: {e}"
@@ -1175,71 +1158,85 @@ class ModelManager:
         if not model_config:
             raise ModelLoadError(f"Model {model_key} not found in configuration.")
 
-        # All T2V is now assumed to be API based
-        if model_config.get("source") != "huggingface_api":
-            # This condition should ideally not be met if load_models ensures only API t2v are considered runnable
-            logger.error(f"Model {model_key} is configured for T2V but not as an API model. Local T2V is deprecated.")
-            raise ModelGenerationError(f"Local Text-to-Video for {model_key} is no longer supported. Configure as API model.")
-
         # API-based T2V generation logic (existing code)
+        source = model_config.get("source")
+        provider = model_config.get("step_config", {}).get("provider")
+
         try:
-            logger.info(f"🎬 Starting Text-to-Video generation (T2V) with API model: {model_key}")
-            # ... (existing API call logic, parameter extraction, client init, etc.)
-            # Ensure all necessary parameters are passed from kwargs and model_config.options
-            hf_model_repo_id = model_config.get("repo")
-            if not hf_model_repo_id:
-                raise ModelGenerationError(f"API model ID (repo) not configured for {model_key}.")
+            # Only support Fal.ai provider for API video generation (source: fal_api)
+            if source == "fal_api":
+                logger.info(f"🎬 Starting Text-to-Video generation (T2V) with Fal.ai model: {model_key} using fal_client.subscribe")
+                # Fal.ai client authentication is handled via FAL_AI_API_KEY environment variable.
+                
+                hf_model_repo_id = model_config.get("repo") # e.g., "Lightricks/LTX-Video"
+                fal_function_id = model_config.get("step_config", {}).get("fal_function_id")
 
-            client = InferenceClient(token=self._hf_token)
-
-            api_params = {}
-            options = model_config.get("options", {})
-            if kwargs.get("num_frames") is not None: api_params["num_frames"] = kwargs["num_frames"]
-            elif options.get("num_frames") is not None: api_params["num_frames"] = options["num_frames"]
-            if kwargs.get("fps") is not None: api_params["num_frames_per_second"] = kwargs["fps"]
-            elif options.get("fps") is not None: api_params["num_frames_per_second"] = options["fps"]
-            if kwargs.get("width") is not None: api_params["width"] = kwargs["width"]
-            elif options.get("width") is not None: api_params["width"] = options["width"]
-            if kwargs.get("height") is not None: api_params["height"] = kwargs["height"]
-            elif options.get("height") is not None: api_params["height"] = options["height"]
-            if kwargs.get("guidance_scale") is not None: api_params["guidance_scale"] = kwargs["guidance_scale"]
-            elif options.get("guidance_scale") is not None: api_params["guidance_scale"] = options["guidance_scale"]
-            if kwargs.get("seed") is not None: api_params["seed"] = kwargs["seed"]
-
-            provider = model_config.get("options", {}).get("provider")
-            client = None
-
-            if provider == "fal-ai":
-                if not self._hf_token:
-                    raise ModelGenerationError(f"HF_TOKEN not configured for model {model_key} using fal-ai provider (authenticated via HF Token).")
-                client = InferenceClient(provider="fal-ai", api_key=self._hf_token)
-                logger.info(f"Using fal-ai provider for T2V model {model_key} with HF_TOKEN.")
-            else:
-                api_token_env_var = model_config.get("options", {}).get("api_token_env_var")
-                token_to_use = self._hf_token 
-                token_source_log = "default HF_TOKEN"
-                if api_token_env_var:
-                    custom_token = os.getenv(api_token_env_var)
-                    if custom_token:
-                        token_to_use = custom_token
-                        token_source_log = f"token from {api_token_env_var}"
+                if not fal_function_id:
+                    if hf_model_repo_id == "Lightricks/LTX-Video":
+                        # Assuming a T2V variant of the function ID for LTX-Video
+                        fal_function_id = "fal-ai/ltx-video-13b-dev/text-to-video" # Placeholder, needs actual T2V function ID
+                        logger.warning(f"'fal_function_id' not in config for T2V model {model_key}, defaulting to '{fal_function_id}' based on LTX-Video example. THIS IS A GUESS.")
                     else:
-                        logger.warning(f"Environment variable {api_token_env_var} for {model_key} not found, falling back to HF_TOKEN.")
-                if not token_to_use:
-                    raise ModelGenerationError(f"An API token ({token_source_log}) is not configured for API model {model_key}.")
-                client = InferenceClient(token=token_to_use)
-                logger.info(f"Using {token_source_log} for T2V model {model_key}.")
+                        raise ModelGenerationError(f"'fal_function_id' for T2V not configured for Fal.ai model {model_key} and no default available.")
 
-            logger.debug(f"Text-to-Video API call for {model_key} ({hf_model_repo_id}) with params: {api_params}")
-            video_bytes = client.text_to_video(
-                prompt=prompt,
-                model=hf_model_repo_id, 
-                negative_prompt=kwargs.get("negative_prompt"),
-                **api_params
-            )
-            generation_time = time.time() - kwargs.get("start_time", time.time())
-            logger.info(f"✅ T2V (API) for {model_key} completed in {generation_time:.2f}s, output {len(video_bytes)} bytes.")
-            return video_bytes
+                logger.info(f"Using Fal.ai function ID for T2V: {fal_function_id}")
+
+                try:
+                    api_arguments = {"prompt": prompt}
+                    options = model_config.get("step_config", {})
+                    if kwargs.get("num_frames") is not None: api_arguments["num_frames"] = kwargs["num_frames"]
+                    elif options.get("num_frames") is not None: api_arguments["num_frames"] = options["num_frames"]
+                    if kwargs.get("width") is not None: api_arguments["width"] = kwargs["width"]
+                    elif options.get("width") is not None: api_arguments["width"] = options["width"]
+                    if kwargs.get("height") is not None: api_arguments["height"] = kwargs["height"]
+                    elif options.get("height") is not None: api_arguments["height"] = options["height"]
+                    if kwargs.get("guidance_scale") is not None: api_arguments["guidance_scale"] = kwargs["guidance_scale"]
+                    elif options.get("guidance_scale") is not None: api_arguments["guidance_scale"] = options["guidance_scale"]
+                    if kwargs.get("seed") is not None: api_arguments["seed"] = kwargs["seed"]
+                    # Negative prompt might be 'negative_prompt' or handled differently
+                    if kwargs.get("negative_prompt"): api_arguments["negative_prompt"] = kwargs["negative_prompt"]
+
+                    logger.debug(f"Calling fal_client.subscribe for {fal_function_id} with arguments: {api_arguments}")
+                    response_data = fal_client.subscribe(fal_function_id, arguments=api_arguments)
+
+                    if not response_data or not isinstance(response_data, dict) or "video" not in response_data or not isinstance(response_data["video"], dict) or "url" not in response_data["video"]:
+                        logger.error(f"Fal.ai T2V response for {fal_function_id} did not contain expected video URL. Response: {response_data}")
+                        raise ModelGenerationError(f"Fal.ai T2V did not return a valid video URL for {model_key}. Check Fal.ai logs.")
+
+                    video_url = response_data["video"]["url"]
+                    logger.info(f"T2V Video generated by Fal.ai, available at: {video_url}. Downloading...")
+
+                    video_download_response = requests.get(video_url, timeout=300)
+                    video_download_response.raise_for_status()
+                    video_bytes = video_download_response.content
+
+                    generation_time = time.time() - kwargs.get("start_time", time.time())
+                    logger.info(f"✅ T2V (Fal.ai via fal_client) for {model_key} completed in {generation_time:.2f}s, output {len(video_bytes)} bytes.")
+                    return video_bytes
+
+                except fal_client.auth.MissingCredentialsError as e:
+                    logger.error(f"Fal.ai Authentication Error for T2V {model_key} ({fal_function_id}): {e}", exc_info=True)
+                    error_msg = f"Fal.ai authentication failed for T2V {model_key}. Ensure FAL_KEY or FAL_KEY_ID/FAL_KEY_SECRET environment variables are set." # Provide user-friendly message
+                    raise ModelGenerationError(error_msg) from e
+                except fal_client.FalClientError as e:
+                    logger.error(f"Fal.ai Server Exception for T2V {model_key} ({fal_function_id}): {e.body}", exc_info=True)
+                    # Check if the exception has a body with a message (common for API errors)
+                    if hasattr(e, 'body') and isinstance(e.body, dict) and 'message' in e.body:
+                        error_msg = f"Fal.ai server error for T2V {model_key}: {e.body['message']}"
+                    else:
+                        error_msg = f"Fal.ai client error for T2V {model_key}: {str(e)}"
+                    raise ModelGenerationError(error_msg) from e
+                except requests.exceptions.RequestException as e:
+                    logger.error(f"Error downloading T2V video from Fal.ai for {model_key}: {e}", exc_info=True)
+                    raise ModelGenerationError(f"Failed to download T2V video from Fal.ai for {model_key}: {e}") from e
+                except Exception as e:
+                    logger.error(f"Error during T2V Fal.ai (fal_client) generation for {model_key}: {e}", exc_info=True)
+                    error_msg = f"Failed to generate T2V video with {model_key} via Fal.ai (fal_client): {e}"
+                    raise ModelGenerationError(error_msg) from e
+
+            else:
+                raise ModelGenerationError(f"Unsupported API provider for T2V: {provider or 'None'}")
+
         except Exception as e:
             logger.error(f"Error during T2V API generation for {model_key}: {e}", exc_info=True)
             error_msg = f"Failed to generate T2V video with {model_key}: {e}"

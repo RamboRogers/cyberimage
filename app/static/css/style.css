@@ -2025,3 +2025,34 @@ footer .branding a:hover::after {
     border: none;
 }
 /* --- End Settings Show/Hide --- */
+
+.button-delete {
+    background-color: #D32F2F; /* A common red for delete/danger */
+    color: var(--text-color);
+    border: 1px solid #B71C1C; /* Darker red border */
+    padding: 0.6rem 1.2rem; /* Consistent padding */
+    border-radius: var(--border-radius);
+    text-transform: uppercase;
+    font-weight: 500;
+    letter-spacing: 0.5px;
+}
+
+.button-delete:hover {
+    background-color: #E53935; /* Lighter red on hover */
+    border-color: #C62828;
+    box-shadow: 0 0 10px rgba(211, 47, 47, 0.5);
+}
+
+.modal-header-title {
+    margin-top: 0;
+    margin-bottom: 1rem; /* Add some space below title */
+    text-align: center;
+    color: var(--neon-green); /* Match other modal titles if desired */
+    font-size: 1.2rem; /* Adjust as needed */
+}
+
+.modal-actions-centered {
+    display: flex; /* Already in modal-actions, but ensure it is here */
+    justify-content: center;
+    gap: 1rem; /* Add gap if not already present in modal-actions */
+}

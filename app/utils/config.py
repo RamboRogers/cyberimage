@@ -13,7 +13,10 @@ def parse_model_config() -> Dict[str, Dict[str, Any]]:
     Parse model configuration from environment variables.
 
     Format: MODEL_<N>=<name>;<repo>;<description>;<source>;<requires_auth>[;<options_json>]
-    Example: MODEL_1=flux-1;black-forest-labs/FLUX.1-dev;FLUX base model;huggingface;true;{\"some_option\": true}
+    Source options: huggingface (local), huggingface_api, fal_api
+    Example Local: MODEL_1=flux-1;black-forest-labs/FLUX.1-dev;FLUX base model;huggingface;true
+    Example HF API: MODEL_10=llava-hf/llava-1.5-7b-hf;llava-hf/llava-1.5-7b-hf;LLaVA 1.5 7B HF;huggingface_api;true;{\"provider\": \"huggingface-inference-api\", \"type\": \"vqa\"}
+    Example Fal API: MODEL_11=ltx-video-i2v-api;Lightricks/LTX-Video;LTX Image-to-Video;fal_api;true;{\"provider\": \"fal-ai\", \"type\": \"i2v\", \"fal_function_id\": \"fal-ai/ltx-video-13b-dev/image-to-video\"}
 
     Returns:
         Dict mapping model names to their configurations
@@ -110,10 +113,12 @@ def parse_model_config() -> Dict[str, Dict[str, Any]]:
                 requires_auth = requires_auth.strip('"\'')
 
                 # Determine if model is enabled based on its type
-                if source_val == "huggingface_api":
+                # Models from API sources (huggingface_api, fal_api) are enabled by default unless explicitly disabled in options
+                if source_val in ["huggingface_api", "fal_api"]:
                     download_enabled = step_config.get('download_enabled', True)
-                    logger.info(f"API model {name} is {'enabled' if download_enabled else 'disabled'} for use")
-                else:
+                    api_source_type = source_val.replace("_api", "").capitalize()
+                    logger.info(f"{api_source_type} API model {name} is {'enabled' if download_enabled else 'disabled'} for use")
+                else: # Local models
                     # For local models, check DOWNLOAD_MODEL_N environment variable
                     download_key = f"DOWNLOAD_MODEL_{model_num}"
                     download_value = os.environ.get(download_key, "true")
@@ -144,20 +149,20 @@ def parse_model_config() -> Dict[str, Dict[str, Any]]:
                     elif heuristic_model_type in common_file_lists:
                         files = common_file_lists[heuristic_model_type]
 
-                # If source is huggingface_api, files are not applicable locally
-                if source_val == "huggingface_api":
+                # If source is an API source (huggingface_api, fal_api), files are not applicable locally
+                if source_val in ["huggingface_api", "fal_api"]:
                     files = [] # API models don't have local files for completeness check
-                    logger.debug(f"Model {name} is from huggingface_api, setting files to empty list.")
+                    logger.debug(f"Model {name} is from {source_val}, setting files to empty list.")
 
-                # Validate provider for huggingface_api source
-                if source_val == "huggingface_api":
+                # Validate provider for API sources
+                if source_val in ["huggingface_api", "fal_api"]:
                     if not isinstance(step_config, dict) or "provider" not in step_config:
-                        logger.error(f"Model {name} with source 'huggingface_api' is missing 'provider' in its JSON options. Skipping this model.")
+                        logger.error(f"Model {name} with source '{source_val}' is missing 'provider' in its JSON options. Skipping this model.")
                         continue
                     if not isinstance(step_config.get("provider"), str) or not step_config.get("provider").strip():
-                        logger.error(f"Model {name} with source 'huggingface_api' has an invalid or empty 'provider' in its JSON options: '{step_config.get("provider")}'. Skipping this model.")
+                        logger.error(f"Model {name} with source '{source_val}' has an invalid or empty 'provider' in its JSON options: '{step_config.get('provider')}'. Skipping this model.")
                         continue
-                    logger.info(f"Configured API model {name} with provider: {step_config['provider']}")
+                    logger.info(f"Configured {source_val} model {name} with provider: {step_config['provider']}")
 
                 # Determine final model type: Explicit JSON type > Heuristic > Default ('image')
                 final_model_type = 'image' # Default to image
@@ -188,7 +193,7 @@ def parse_model_config() -> Dict[str, Dict[str, Any]]:
                     "requires_auth": requires_auth.lower() == "true",
                     "download_enabled": download_enabled, # Represents if the model (local or API) is active
                     "type": final_model_type, # Use the determined final type
-                    "files": files, # Will be empty for huggingface_api source
+                    "files": files, # Will be empty for API sources like huggingface_api or fal_api
                     "step_config": step_config # Add parsed step config (contains provider for API models)
                 }
 

@@ -247,6 +247,14 @@ def get_queue(): # Handles GET /api/queue
   - Fix: Modified the delete handler in `main.js` to always use the `/api/image/${mediaId}` endpoint for deletion, regardless of `mediaType`.
   - Status: Implemented. Requires testing delete on index page.
 
+- **API Token Handling and T2V Parameter Adjustments (Recent Session):**
+  - **Environment Variables for API Keys:**
+    - Integrated loading of `HF_TOKEN`, `FAL_AI_API_KEY`, and `REPLICATE_API_KEY` from `.env` into Flask's `app.config` via `app/__init__.py`. This ensures API keys are available application-wide for models requiring them (e.g., Hugging Face, Fal.ai, Replicate).
+  - **T2V API Call (`InferenceClient.text_to_video`) Fixes (`app/models/manager.py`):**
+    - **Unsupported Parameter Removal:** Removed `num_frames_per_second` from parameters passed to `InferenceClient.text_to_video()`, as it was causing errors. The call now aligns with the client's expected parameters.
+    - **Provider Configuration:** Corrected the logic to fetch the `provider` (e.g., `fal-ai`) for the `InferenceClient`. It now correctly uses `step_config.get('provider')` instead of `options.get('provider')`, resolving issues where the provider was not being recognized.
+    - **Debug Logging:** Added debug logging to warn about any unsupported parameters being passed during API-based T2V generation, aiding in future troubleshooting.
+
 ## UI Updates (Revised)
 - **`index.html` / `main.js`:**
   - **Main form now supports T2I and T2V model selection.**
